@@ -1,5 +1,6 @@
 from torch import tensor, randn
 from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, AvgPool2d, Linear
+import torch.nn.functional as F
 from UNIQ.uniq import UNIQNet
 from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
@@ -258,6 +259,21 @@ class ResNet(Module):
 
     def getLearnableParams(self):
         return self.learnable_params
+
+    # return top k operations per layer
+    def topOps(self, k):
+        top = []
+        for layer in self.layersList:
+            # calc weights from alphas and sort them
+            weights = F.softmax(layer.alphas, dim=-1)
+            wSorted, wIndices = weights.sort(descending=True)
+            # keep only top-k
+            wSorted = wSorted[:k]
+            wIndices = wIndices[:k]
+            # add to top
+            top.append([(w.item(), layer.ops[i]) for w, i in zip(wSorted, wIndices)])
+
+        return top
 
     def switch_stage(self, logger=None):
         layer = self.layersList[self.nLayersQuantCompleted]
