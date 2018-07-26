@@ -74,7 +74,42 @@ def parseArgs():
     return args
 
 
-def train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr):
+def setup_logging(log_file, logger_name):
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    handler = logging.FileHandler(log_file)
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    # disable logging to stdout
+    logger.propagate = False
+
+    return logger
+
+
+def initLogger(folderName):
+    filePath = '{}/log.txt'.format(folderName)
+    logger = setup_logging(filePath, 'darts')
+
+    logger.info('Experiment dir: [{}]'.format(folderName))
+
+    return logger
+
+
+def initTrainLogger(logger_file_name, save_path):
+    folder_path = '{}/train'.format(save_path)
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    log_file_path = '{}/{}.txt'.format(folder_path, logger_file_name)
+    logger = setup_logging(log_file_path, logger_file_name)
+
+    return logger
+
+
+def train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, logger):
     objs = AvgrageMeter()
     top1 = AvgrageMeter()
     top5 = AvgrageMeter()
@@ -117,10 +152,10 @@ def train(train_queue, search_queue, args, model, architect, criterion, optimize
             logger.info('train [{}/{}] Loss:[{:.5f}] Accuracy:[{:.3f}] time:[{:.5f}]'
                         .format(step, nBatches, objs.avg, top1.avg, endTime - startTime))
 
-    return top1.avg, objs.avg, grad.avg
+    return top1.avg, objs.avg
 
 
-def infer(valid_queue, args, model, criterion):
+def infer(valid_queue, args, model, criterion, logger):
     objs = AvgrageMeter()
     top1 = AvgrageMeter()
     top5 = AvgrageMeter()
@@ -154,18 +189,7 @@ def infer(valid_queue, args, model, criterion):
 
 
 args = parseArgs()
-
-log_format = '%(asctime)s %(message)s'
-logging.basicConfig(stream=stdout, level=logging.INFO,
-                    format=log_format, datefmt='%d/%m/%Y %H:%M:%S')
-fh = logging.FileHandler(os.path.join(args.save, 'log.txt'))
-fh.setFormatter(logging.Formatter(log_format))
-
-logger = logging.getLogger('darts')
-logger.addHandler(fh)
-# disable logging to stdout
-logger.propagate = False
-
+logger = initLogger(args.save)
 CIFAR_CLASSES = 10
 
 if not is_available():
@@ -243,9 +267,10 @@ scheduler = CosineAnnealingLR(optimizer, float(nEpochs), eta_min=args.learning_r
 architect = Architect(model, args)
 
 for epoch in range(nEpochs):
+    trainLogger = initTrainLogger(str(epoch), args.save)
     # switch stage, i.e. freeze one more layer
     if epoch in epochsSwitchStage:
-        model.switch_stage(logger)
+        model.switch_stage(trainLogger)
         # update optimizer & scheduler due to update in learnable params
         optimizer = SGD(model.parameters(), scheduler.get_lr()[0],
                         momentum=args.momentum, weight_decay=args.weight_decay)
@@ -253,7 +278,8 @@ for epoch in range(nEpochs):
 
     scheduler.step()
     lr = scheduler.get_lr()[0]
-    logger.info('Epoch:[{}] , optimizer_lr:[{}], scheduler_lr:[{}]'.format(epoch, optimizer.defaults['lr'], lr))
+
+    trainLogger.info('optimizer_lr:[{}], scheduler_lr:[{}]'.format(optimizer.defaults['lr'], lr))
 
     # genotype = model.genotype()
     # logger.info('genotype = %s', genotype)
@@ -262,11 +288,15 @@ for epoch in range(nEpochs):
     # print(F.softmax(model.alphas_reduce, dim=-1))
 
     # training
-    train_acc, train_obj, arch_grad_norm = train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr)
-    logger.info('training accuracy:[{:.3f}]'.format(train_acc))
+    train_acc, train_loss = train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, trainLogger)
 
     # validation
-    valid_acc, valid_obj = infer(valid_queue, args, model, criterion)
-    logger.info('validation accuracy:[{:.3f}]'.format(valid_acc))
+    valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
+
+    logger.info(
+        'Epoch:[{}] , training accuracy:[{:.3f}] , validation accuracy:[{:.3f}] ,'
+        ' training loss:[{:.3f}] , validation loss:[{:.3f}] ,'
+        ' optimizer_lr:[{}], scheduler_lr:[{}]'
+            .format(epoch, train_acc, valid_acc, train_loss, valid_loss, optimizer.defaults['lr'], lr))
 
     save(model, os.path.join(args.save, 'weights.pt'))
