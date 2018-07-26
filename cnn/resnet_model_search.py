@@ -39,13 +39,10 @@ class QuantizedOp(UNIQNet):
         self.prepare_uniq()
 
     def standardForward(self, x):
-        assert (x.is_cuda)
         return self.op(x)
 
     def residualForward(self, x, residual):
-        assert (x.is_cuda)
         out = self.op[0](x)
-        assert (out.size() == residual.size())
         out += residual
         out = self.op[1](out)
 
@@ -62,10 +59,6 @@ class MixedLinear(Module):
             self.ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
 
     def forward(self, x, alphas):
-        assert (x.is_cuda)
-        assert (alphas.is_cuda)
-        assert (len(alphas.size()) == 1)
-
         return sum(a * op(x) for a, op in zip(alphas, self.ops))
 
     def numOfOps(self):
@@ -85,10 +78,6 @@ class MixedConv(Module):
             self.ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
 
     def forward(self, x, alphas):
-        assert (x.is_cuda)
-        assert (alphas.is_cuda)
-        assert (len(alphas.size()) == 1)
-
         return sum(a * op(x) for a, op in zip(alphas, self.ops))
 
     def numOfOps(self):
@@ -114,25 +103,10 @@ class MixedConvWithReLU(Module):
         self.forward = self.residualForward if useResidual else self.standardForward
 
     def standardForward(self, x, alphas):
-        assert (x.is_cuda)
-        assert (alphas.is_cuda)
-        assert (len(alphas.size()) == 1)
-
         return sum(a * op(x) for a, op in zip(alphas, self.ops))
 
     def residualForward(self, x, alphas, residual):
-        assert (x.is_cuda)
-        assert (alphas.is_cuda)
-        assert (len(alphas.size()) == 1)
-
         return sum(a * op(x, residual) for a, op in zip(alphas, self.ops))
-
-        # # out = sum(a * op._modules['op'][0](x) for a, op in zip(alphas, self.ops))
-        # # assert (out.size() == residual.size())
-        # # out = out + residual
-        # # out = out + sum(a * op._modules['op'][1](out) for a, op in zip(alphas, self.ops))
-        #
-        # return out
 
     def numOfOps(self):
         return len(self.ops)
@@ -151,10 +125,6 @@ class BasicBlock(Module):
             if in_planes != out_planes else None
 
     def forward(self, x, alphas, downsampleAlphas=None):
-        assert (x.is_cuda)
-        assert (alphas.is_cuda)
-        assert (len(alphas.size()) == 2)
-
         residual = x if self.downsample is None else self.downsample(x, downsampleAlphas)
 
         out = self.block1(x, alphas[0])
@@ -245,7 +215,6 @@ class ResNet(Module):
         return len(self.layersList)
 
     def forward(self, x):
-        assert (x.is_cuda)
         out = self.block1(x, self.alphasConv[0])
 
         alphasConvIdx = 1
@@ -276,7 +245,7 @@ class ResNet(Module):
 
     @staticmethod
     def initialize_alphas(nLayers, numOfOps):
-        return tensor(1e-3 * randn(nLayers, numOfOps).cuda(), requires_grad=True)
+        return tensor(randn(nLayers, numOfOps).cuda(), requires_grad=True)
 
     def arch_parameters(self):
         return self._arch_parameters
