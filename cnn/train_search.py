@@ -8,7 +8,7 @@ import logging
 import argparse
 
 from torch.nn import CrossEntropyLoss
-from torch.nn.utils.clip_grad import clip_grad_norm_
+from torch.nn.utils.clip_grad import clip_grad_norm
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -25,7 +25,6 @@ from cnn.utils import create_exp_dir, count_parameters_in_MB, _data_transforms_c
 from cnn.model_search import Network
 from cnn.resnet_model_search import ResNet
 from cnn.architect import Architect
-from cnn.operations import OPS
 
 
 def parseArgs():
@@ -33,18 +32,18 @@ def parseArgs():
     parser.add_argument('--data', type=str, default='/home/yochaiz/UNIQ/results', help='location of the data corpus')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
     parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
-    parser.add_argument('--learning_rate_min', type=float, default=0.001, help='min learning rate')
+    parser.add_argument('--learning_rate_min', type=float, default=1E-8, help='min learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('--weight_decay', type=float, default=3e-4, help='weight decay')
     parser.add_argument('--report_freq', type=float, default=1, help='report frequency')
     parser.add_argument('--gpu', type=str, default='0', help='gpu device id, e.g. 0,1,3')
-    parser.add_argument('--epochs', type=str, default='1',
+    parser.add_argument('--epochs', type=str, default='5',
                         help='num of training epochs per layer, as list, e.g. 5,4,3,8,6.'
                              'If len(epochs)<len(layers) then last value is used for rest of the layers')
-    parser.add_argument('--workers', type=int, default=16, choices=range(1, 32), help='num of workers')
-    parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
-    parser.add_argument('--layers', type=int, default=8, help='total number of layers')
-    parser.add_argument('--model_path', type=str, default='saved_models', help='path to save the model')
+    parser.add_argument('--workers', type=int, default=1, choices=range(1, 32), help='num of workers')
+    # parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
+    # parser.add_argument('--layers', type=int, default=8, help='total number of layers')
+    # parser.add_argument('--model_path', type=str, default='saved_models', help='path to save the model')
     parser.add_argument('--cutout', action='store_true', default=False, help='use cutout')
     parser.add_argument('--cutout_length', type=int, default=16, help='cutout length')
     parser.add_argument('--drop_path_prob', type=float, default=0.3, help='drop path probability')
@@ -60,10 +59,8 @@ def parseArgs():
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32), help='max number of bits')
     args = parser.parse_args()
 
-    # update epochs per layer list
+    # convert epochs to list
     args.epochs = [int(i) for i in args.epochs.split(',')]
-    while len(args.epochs) < args.layers:
-        args.epochs.append(args.epochs[-1])
 
     # update GPUs list
     if type(args.gpu) is str:
@@ -71,7 +68,7 @@ def parseArgs():
 
     args.device = 'cuda:' + str(args.gpu[0])
 
-    args.save = 'search-{}-{}'.format(args.save, strftime("%Y%m%d-%H%M%S"))
+    args.save = 'results/search-{}-{}'.format(args.save, strftime("%Y%m%d-%H%M%S"))
     create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
 
     return args
@@ -106,7 +103,7 @@ def train(train_queue, search_queue, args, model, architect, criterion, optimize
         loss = criterion(logits, target)
 
         loss.backward()
-        clip_grad_norm_(model.parameters(), args.grad_clip)
+        clip_grad_norm(model.parameters(), args.grad_clip)
         optimizer.step()
 
         prec1, prec5 = accuracy(logits, target, topk=(1, 5))
@@ -197,8 +194,6 @@ logger.info('GPU:{}'.format(args.gpu))
 logger.info("args = %s", args)
 logger.info("param size = %fMB", count_parameters_in_MB(model))
 logger.info('Learnable params:[{}]'.format(len(model.learnable_params)))
-logger.info('Number of operations:[{}]'.format(len(OPS)))
-logger.info('OPS:{}'.format(OPS.keys()))
 logger.info('alphas tensor size:[{}]'.format(model.arch_parameters()[0].size()))
 
 optimizer = SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -210,10 +205,10 @@ train_data = CIFAR10(root=args.data, train=True, download=True, transform=train_
 valid_data = CIFAR10(root=args.data, train=False, download=True, transform=valid_transform)
 
 #### narrow data for debug purposes
-train_data.train_data = train_data.train_data[0:2000]
-train_data.train_labels = train_data.train_labels[0:2000]
-valid_data.test_data = valid_data.test_data[0:1000]
-valid_data.test_labels = valid_data.test_labels[0:1000]
+# train_data.train_data = train_data.train_data[0:2000]
+# train_data.train_labels = train_data.train_labels[0:2000]
+# valid_data.test_data = valid_data.test_data[0:1000]
+# valid_data.test_labels = valid_data.test_labels[0:1000]
 ####
 
 num_train = len(train_data)
@@ -229,28 +224,22 @@ search_queue = DataLoader(train_data, batch_size=args.batch_size, sampler=Subset
 valid_queue = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False,
                          pin_memory=True, num_workers=args.workers)
 
-# init epochs number we have to switch stage in
-# epochsSwitchStage = [0]
-# for e in args.epochs:
-#     epochsSwitchStage.append(e + epochsSwitchStage[-1])
-# # total number of epochs is the last value in epochsSwitchStage
-# nEpochs = epochsSwitchStage[-1]
-# # remove epoch 0 from list, and last switch, since after last switch there are no layers to quantize
-# epochsSwitchStage = epochsSwitchStage[1:-1]
-
+# extend epochs list as number of model layers
+while len(args.epochs) < model.nLayers():
+    args.epochs.append(args.epochs[-1])
+# init epochs number where we have to switch stage in
 epochsSwitchStage = [0]
-nLayers = model.nLayers() if hasattr(model, 'nLayers') and callable(getattr(model, 'nLayers')) else args.layers
-for _ in range(nLayers):
-    epochsSwitchStage.append(20 + epochsSwitchStage[-1])
-
+for e in args.epochs:
+    epochsSwitchStage.append(e + epochsSwitchStage[-1])
+# total number of epochs is the last value in epochsSwitchStage
 nEpochs = epochsSwitchStage[-1]
+# remove epoch 0 from list, and last switch, since after last switch there are no layers to quantize
 epochsSwitchStage = epochsSwitchStage[1:-1]
 
 logger.info('nEpochs:[{}]'.format(nEpochs))
 logger.info('epochsSwitchStage:{}'.format(epochsSwitchStage))
 
 scheduler = CosineAnnealingLR(optimizer, float(nEpochs), eta_min=args.learning_rate_min)
-
 architect = Architect(model, args)
 
 for epoch in range(nEpochs):
@@ -273,10 +262,8 @@ for epoch in range(nEpochs):
     # print(F.softmax(model.alphas_reduce, dim=-1))
 
     # training
-    logger.info('BEFORE:{}'.format(model.block1.ops._modules['0'].op._modules['0']._modules['0'].weight[0, 0]))
     train_acc, train_obj, arch_grad_norm = train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr)
     logger.info('training accuracy:[{:.3f}]'.format(train_acc))
-    logger.info('AFTER:{}'.format(model.block1.ops._modules['0'].op._modules['0']._modules['0'].weight[0, 0]))
 
     # validation
     valid_acc, valid_obj = infer(valid_queue, args, model, criterion)
