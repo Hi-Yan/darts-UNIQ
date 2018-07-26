@@ -3,6 +3,7 @@ from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, AvgPoo
 from UNIQ.uniq import UNIQNet
 from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
+from abc import abstractmethod
 
 
 def save_quant_state(self, _):
@@ -49,67 +50,101 @@ class QuantizedOp(UNIQNet):
         return out
 
 
-class MixedLinear(Module):
+class MixedOp(Module):
+    def __init__(self):
+        super(MixedOp, self).__init__()
+
+        # init operations mixture
+        self.ops = self.initOps()
+        # init opretations alphas (weights)
+        self.alphas = tensor(randn(self.numOfOps()).cuda(), requires_grad=True)
+
+    @abstractmethod
+    def initOps(self):
+        raise NotImplementedError('subclasses must override initOps()!')
+
+    def forward(self, x):
+        return sum(a * op(x) for a, op in zip(self.alphas, self.ops))
+
+    def numOfOps(self):
+        return len(self.ops)
+
+
+class MixedLinear(MixedOp):
     def __init__(self, nBitsMin, nBitsMax, in_features, out_features):
+        self.nBitsMin = nBitsMin
+        self.nBitsMax = nBitsMax
+        self.in_features = in_features
+        self.out_features = out_features
+
         super(MixedLinear, self).__init__()
 
-        self.ops = ModuleList()
-        for bitwidth in range(nBitsMin, nBitsMax + 1):
-            op = Linear(in_features, out_features)
-            self.ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
+    def initOps(self):
+        ops = ModuleList()
+        for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+            op = Linear(self.in_features, self.out_features)
+            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
 
-    def forward(self, x, alphas):
-        return sum(a * op(x) for a, op in zip(alphas, self.ops))
-
-    def numOfOps(self):
-        return len(self.ops)
+        return ops
 
 
-class MixedConv(Module):
+class MixedConv(MixedOp):
     def __init__(self, nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride):
+        self.nBitsMin = nBitsMin
+        self.nBitsMax = nBitsMax
+        self.in_planes = in_planes
+        self.out_planes = out_planes
+        self.kernel_size = kernel_size
+        self.stride = stride
+
         super(MixedConv, self).__init__()
 
-        self.ops = ModuleList()
-        for bitwidth in range(nBitsMin, nBitsMax + 1):
+    def initOps(self):
+        ops = ModuleList()
+        for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
             op = Sequential(
-                Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=1, bias=False),
-                BatchNorm2d(out_planes)
+                Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
+                       stride=self.stride, padding=1, bias=False),
+                BatchNorm2d(self.out_planes)
             )
-            self.ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
+            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
 
-    def forward(self, x, alphas):
-        return sum(a * op(x) for a, op in zip(alphas, self.ops))
-
-    def numOfOps(self):
-        return len(self.ops)
+        return ops
 
 
-class MixedConvWithReLU(Module):
+class MixedConvWithReLU(MixedOp):
     def __init__(self, nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride, useResidual=False):
+        self.nBitsMin = nBitsMin
+        self.nBitsMax = nBitsMax
+        self.in_planes = in_planes
+        self.out_planes = out_planes
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.useResidual = useResidual
+
         super(MixedConvWithReLU, self).__init__()
 
-        self.ops = ModuleList()
-        for bitwidth in range(nBitsMin, nBitsMax + 1):
-            for act_bitwidth in range(nBitsMin, nBitsMax + 1):
+        if useResidual:
+            self.forward = self.residualForward
+
+    def initOps(self):
+        ops = ModuleList()
+        for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+            for act_bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
                 op = Sequential(
                     Sequential(
-                        Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=1, bias=False),
-                        BatchNorm2d(out_planes)
+                        Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
+                               stride=self.stride, padding=1, bias=False),
+                        BatchNorm2d(self.out_planes)
                     ),
                     ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
                 )
-                self.ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=useResidual))
+                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
 
-        self.forward = self.residualForward if useResidual else self.standardForward
+        return ops
 
-    def standardForward(self, x, alphas):
-        return sum(a * op(x) for a, op in zip(alphas, self.ops))
-
-    def residualForward(self, x, alphas, residual):
-        return sum(a * op(x, residual) for a, op in zip(alphas, self.ops))
-
-    def numOfOps(self):
-        return len(self.ops)
+    def residualForward(self, x, residual):
+        return sum(a * op(x, residual) for a, op in zip(self.alphas, self.ops))
 
 
 class BasicBlock(Module):
@@ -124,11 +159,11 @@ class BasicBlock(Module):
         self.downsample = MixedConv(nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride1) \
             if in_planes != out_planes else None
 
-    def forward(self, x, alphas, downsampleAlphas=None):
-        residual = x if self.downsample is None else self.downsample(x, downsampleAlphas)
+    def forward(self, x):
+        residual = x if self.downsample is None else self.downsample(x)
 
-        out = self.block1(x, alphas[0])
-        out = self.block2(out, alphas[1], residual)
+        out = self.block1(x)
+        out = self.block2(out, residual)
 
         return out
 
@@ -173,32 +208,14 @@ class ResNet(Module):
         self.fc = MixedLinear(nBitsMin, nBitsMax, 64, self.nClasses)
 
         # build mixture layers list
-        for b in layers: self.layersList.extend(b.getLayers())
-        self.layersList.append(self.fc)
+        self.layersList = [m for m in self.modules() if isinstance(m, MixedOp)]
+
+        # build alphas list, i.e. architecture parameters
+        self._arch_parameters = [l.alphas for l in self.layersList]
 
         # set noise=True for 1st layer
         for op in self.layersList[0].ops:
             op.noise = True
-
-        # init alphas (operations weights)
-        nConvMixtureLayers, nLinearMixtureLayers, nDownsampleLayers = 0, 0, 0
-        nOpsConvMixture, nOpsLinearMixture, nOpsDownsampleMixture = 0, 0, 0
-        for l in self.layersList:
-            if isinstance(l, MixedConvWithReLU):
-                nConvMixtureLayers += 1
-                nOpsConvMixture = l.numOfOps()
-            elif isinstance(l, MixedLinear):
-                nLinearMixtureLayers += 1
-                nOpsLinearMixture = l.numOfOps()
-            elif isinstance(l, MixedConv):
-                nDownsampleLayers += 1
-                nOpsDownsampleMixture = l.numOfOps()
-
-        self.alphasConv = self.initialize_alphas(nConvMixtureLayers, nOpsConvMixture)
-        self.alphasDownsample = self.initialize_alphas(nDownsampleLayers, nOpsLinearMixture)
-        self.alphasLinear = self.initialize_alphas(nLinearMixtureLayers, nOpsDownsampleMixture)
-
-        self._arch_parameters = [self.alphasConv, self.alphasLinear, self.alphasDownsample]
 
         # init criterion
         self._criterion = criterion
@@ -215,37 +232,26 @@ class ResNet(Module):
         return len(self.layersList)
 
     def forward(self, x):
-        out = self.block1(x, self.alphasConv[0])
+        out = self.block1(x)
 
-        alphasConvIdx = 1
-        alphasDownsampleIdx = 0
         blockNum = 2
         b = getattr(self, 'block{}'.format(blockNum))
         while b is not None:
-            alphasDownsample = None
-            if b.downsample is not None:
-                alphasDownsample = self.alphasDownsample[alphasDownsampleIdx]
-                alphasDownsampleIdx += 1
+            out = b(out)
 
-            out = b(out, self.alphasConv[alphasConvIdx:alphasConvIdx + 2], alphasDownsample)
-
-            alphasConvIdx += 2
+            # move to next block
             blockNum += 1
             b = getattr(self, 'block{}'.format(blockNum), None)
 
         out = self.avgpool(out)
         out = out.view(out.size(0), -1)
-        out = self.fc(out, self.alphasLinear[0])
+        out = self.fc(out)
 
         return out
 
     def _loss(self, input, target):
         logits = self(input)
         return self._criterion(logits, target)
-
-    @staticmethod
-    def initialize_alphas(nLayers, numOfOps):
-        return tensor(randn(nLayers, numOfOps).cuda(), requires_grad=True)
 
     def arch_parameters(self):
         return self._arch_parameters
