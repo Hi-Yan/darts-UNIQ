@@ -229,10 +229,10 @@ train_data = CIFAR10(root=args.data, train=True, download=True, transform=train_
 valid_data = CIFAR10(root=args.data, train=False, download=True, transform=valid_transform)
 
 #### narrow data for debug purposes
-# train_data.train_data = train_data.train_data[0:2000]
-# train_data.train_labels = train_data.train_labels[0:2000]
-# valid_data.test_data = valid_data.test_data[0:1000]
-# valid_data.test_labels = valid_data.test_labels[0:1000]
+train_data.train_data = train_data.train_data[0:640]
+train_data.train_labels = train_data.train_labels[0:640]
+valid_data.test_data = valid_data.test_data[0:320]
+valid_data.test_labels = valid_data.test_labels[0:320]
 ####
 
 num_train = len(train_data)
@@ -270,6 +270,12 @@ for epoch in range(nEpochs):
     trainLogger = initTrainLogger(str(epoch), args.save)
     # switch stage, i.e. freeze one more layer
     if epoch in epochsSwitchStage:
+        # validation
+        valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
+        message = 'Epoch:[{}] , validation accuracy:[{:.3f}] , validation loss:[{:.3f}]'.format(epoch, valid_acc, valid_loss)
+        logger.info(message)
+        trainLogger.info(message)
+        # switch stage
         model.switch_stage(trainLogger)
         # update optimizer & scheduler due to update in learnable params
         optimizer = SGD(model.parameters(), scheduler.get_lr()[0],
@@ -281,22 +287,28 @@ for epoch in range(nEpochs):
 
     trainLogger.info('optimizer_lr:[{}], scheduler_lr:[{}]'.format(optimizer.defaults['lr'], lr))
 
-    # genotype = model.genotype()
-    # logger.info('genotype = %s', genotype)
-
     # print(F.softmax(model.alphas_normal, dim=-1))
     # print(F.softmax(model.alphas_reduce, dim=-1))
 
     # training
     train_acc, train_loss = train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, trainLogger)
 
-    # validation
-    valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
+    # log accuracy, loss, etc.
+    message = 'Epoch:[{}] , training accuracy:[{:.3f}] , training loss:[{:.3f}] , optimizer_lr:[{}], scheduler_lr:[{}]' \
+        .format(epoch, train_acc, train_loss, optimizer.defaults['lr'], lr)
+    logger.info(message)
+    trainLogger.info(message)
 
-    logger.info(
-        'Epoch:[{}] , training accuracy:[{:.3f}] , validation accuracy:[{:.3f}] ,'
-        ' training loss:[{:.3f}] , validation loss:[{:.3f}] ,'
-        ' optimizer_lr:[{}], scheduler_lr:[{}]'
-            .format(epoch, train_acc, valid_acc, train_loss, valid_loss, optimizer.defaults['lr'], lr))
+    # log dominant QuantizedOp in each layer
+    k = 2
+    top = model.topOps(k=k)
+    trainLogger.info('=============================================')
+    trainLogger.info('Top [{}] quantizations per layer:'.format(k))
+    trainLogger.info('=============================================')
+    for i, layerTop in enumerate(top):
+        message = 'Layer:[{}]  '.format(i)
+        for w, layer in layerTop:
+            message += 'w:[{:.3f}]  bitwidth:{}  act_bitwidth:{}  ||  '.format(w, layer.bitwidth, layer.act_bitwidth)
+        trainLogger.info(message)
 
-    save(model, os.path.join(args.save, 'weights.pt'))
+save(model, os.path.join(args.save, 'weights.pt'))
