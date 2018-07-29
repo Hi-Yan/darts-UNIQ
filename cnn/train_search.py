@@ -31,7 +31,7 @@ from cnn.architect import Architect
 
 def parseArgs():
     parser = argparse.ArgumentParser("cifar")
-    parser.add_argument('--data', type=str, default='/home/yochaiz/UNIQ/results', help='location of the data corpus')
+    parser.add_argument('--data', type=str, required=True, help='location of the data corpus')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
     parser.add_argument('--learning_rate_min', type=float, default=1E-8, help='min learning rate')
@@ -54,6 +54,7 @@ def parseArgs():
     parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping')
     parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
     parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
+    parser.add_argument('--propagate', action='store_true', default=False, help='print to stdout')
     parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
@@ -84,7 +85,7 @@ def save_checkpoint(state, is_best, path='.', filename='model'):
         copyfile(default_filename, '{}/{}_opt.{}'.format(path, filename, fileType))
 
 
-def setup_logging(log_file, logger_name):
+def setup_logging(log_file, logger_name, propagate=False):
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
     handler = logging.FileHandler(log_file)
@@ -93,28 +94,28 @@ def setup_logging(log_file, logger_name):
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
-    # disable logging to stdout
-    logger.propagate = False
+    # logging to stdout
+    logger.propagate = propagate
 
     return logger
 
 
-def initLogger(folderName):
+def initLogger(folderName, propagate=False):
     filePath = '{}/log.txt'.format(folderName)
-    logger = setup_logging(filePath, 'darts')
+    logger = setup_logging(filePath, 'darts',propagate)
 
     logger.info('Experiment dir: [{}]'.format(folderName))
 
     return logger
 
 
-def initTrainLogger(logger_file_name, save_path):
+def initTrainLogger(logger_file_name, save_path, propagate=False):
     folder_path = '{}/train'.format(save_path)
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
     log_file_path = '{}/{}.txt'.format(folder_path, logger_file_name)
-    logger = setup_logging(log_file_path, logger_file_name)
+    logger = setup_logging(log_file_path, logger_file_name,propagate)
 
     return logger
 
@@ -205,7 +206,8 @@ def infer(valid_queue, args, model, criterion, logger):
 
 
 args = parseArgs()
-logger = initLogger(args.save)
+print(args)
+logger = initLogger(args.save, args.propagate)
 CIFAR_CLASSES = 10
 
 if not is_available():
@@ -288,7 +290,7 @@ architect = Architect(model, args)
 best_prec1 = 0.0
 
 for epoch in range(nEpochs):
-    trainLogger = initTrainLogger(str(epoch), args.save)
+    trainLogger = initTrainLogger(str(epoch), args.save, args.propagate)
 
     scheduler.step()
     lr = scheduler.get_lr()[0]
