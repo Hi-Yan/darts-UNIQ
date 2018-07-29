@@ -76,7 +76,7 @@ def parseArgs():
     return args
 
 
-def save_checkpoint(state, is_best, path='.', filename='checkpoint'):
+def save_checkpoint(state, is_best, path='.', filename='model'):
     fileType = 'pth.tar'
     default_filename = '{}/{}_checkpoint.{}'.format(path, filename, fileType)
     saveModel(state, default_filename)
@@ -293,7 +293,7 @@ for epoch in range(nEpochs):
     scheduler.step()
     lr = scheduler.get_lr()[0]
 
-    trainLogger.info('optimizer_lr:[{}], scheduler_lr:[{}]'.format(optimizer.defaults['lr'], lr))
+    trainLogger.info('optimizer_lr:[{:.5f}], scheduler_lr:[{:.5f}]'.format(optimizer.defaults['lr'], lr))
 
     # print(F.softmax(model.alphas_normal, dim=-1))
     # print(F.softmax(model.alphas_reduce, dim=-1))
@@ -319,6 +319,13 @@ for epoch in range(nEpochs):
             message += 'w:[{:.3f}]  bitwidth:{}  act_bitwidth:{}  ||  '.format(w, layer.bitwidth, layer.act_bitwidth)
         trainLogger.info(message)
 
+    # save model checkpoint
+    save_checkpoint({
+        'epoch': epoch + 1,
+        'state_dict': model.state_dict(),
+        'best_prec1': best_prec1,
+    }, False, path=args.save)
+
     # switch stage, i.e. freeze one more layer
     if epoch in epochsSwitchStage:
         # validation
@@ -328,13 +335,13 @@ for epoch in range(nEpochs):
         logger.info(message)
         trainLogger.info(message)
 
-        # is_best = valid_acc > best_prec1
-        # best_prec1 = max(valid_acc, best_prec1)
-        # save_checkpoint({
-        #     'epoch': epoch + 1,
-        #     'state_dict': model.state_dict(),
-        #     'best_prec1': best_prec1,
-        # }, is_best, path=args.save)
+        is_best = valid_acc > best_prec1
+        best_prec1 = max(valid_acc, best_prec1)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+        }, is_best, path=args.save)
 
         # switch stage
         model.switch_stage(trainLogger)
