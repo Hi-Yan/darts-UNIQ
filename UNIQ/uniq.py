@@ -54,7 +54,7 @@ class UNIQNet(nn.Module):
         self.act_quant = act_quant
         assert (isinstance(act_bitwidth, list))
         self.act_bitwidth = act_bitwidth
-        self.quant_edges = quant_edges
+        self.quant_edges = quant and quant_edges
         self.stages = list(range(step_setup[0], 1000, step_setup[1]))
         self.register_forward_pre_hook(save_state)
         self.register_forward_hook(restore_state)
