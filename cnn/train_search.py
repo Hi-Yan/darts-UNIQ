@@ -165,7 +165,6 @@ def train(train_queue, search_queue, args, model, architect, criterion, optimize
 
         arch_grad_norm = architect.step(input, target, input_search, target_search, lr, optimizer, unrolled=args.unrolled)
         grad.update(arch_grad_norm)
-        # TODO: bring it back to life
 
         optimizer.zero_grad()
         logits = model(input)
