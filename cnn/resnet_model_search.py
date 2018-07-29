@@ -262,7 +262,8 @@ class ResNet(Module):
         top = []
         for layer in self.layersList:
             # calc weights from alphas and sort them
-            weights = F.softmax(layer.alphas, dim=-1)
+            # weights = F.softmax(layer.alphas, dim=-1)
+            weights = layer.alphas
             wSorted, wIndices = weights.sort(descending=True)
             # keep only top-k
             wSorted = wSorted[:k]
@@ -311,6 +312,7 @@ class ResNet(Module):
         checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
         self.load_state_dict(checkpoint['state_dict'])
         logger.info('Loaded model from [{}]'.format(path))
+        logger.info('checkpoint accuracy:[{:.5f}]'.format(checkpoint['best_prec1']))
 
     # def loadFromCheckpoint(self, path, logger, gpu):
     #     checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
