@@ -102,7 +102,7 @@ def setup_logging(log_file, logger_name, propagate=False):
 
 def initLogger(folderName, propagate=False):
     filePath = '{}/log.txt'.format(folderName)
-    logger = setup_logging(filePath, 'darts',propagate)
+    logger = setup_logging(filePath, 'darts', propagate)
 
     logger.info('Experiment dir: [{}]'.format(folderName))
 
@@ -115,15 +115,31 @@ def initTrainLogger(logger_file_name, save_path, propagate=False):
         os.makedirs(folder_path)
 
     log_file_path = '{}/{}.txt'.format(folder_path, logger_file_name)
-    logger = setup_logging(log_file_path, logger_file_name,propagate)
+    logger = setup_logging(log_file_path, logger_file_name, propagate)
 
     return logger
+
+
+def logDominantQuantizedOp(model, k, logger):
+    top = model.topOps(k=k)
+    logger.info('=============================================')
+    logger.info('Top [{}] quantizations per layer:'.format(k))
+    logger.info('=============================================')
+    for i, layerTop in enumerate(top):
+        message = 'Layer:[{}]  '.format(i)
+        for w, layer in layerTop:
+            message += 'w:[{:.3f}]  bitwidth:{}  act_bitwidth:{}  ||  '.format(w, layer.bitwidth, layer.act_bitwidth)
+
+        logger.info(message)
+
+    logger.info('=============================================')
 
 
 def printModelToFile(model, save_path):
     filePath = '{}/model.txt'.format(save_path)
     logger = setup_logging(filePath, 'modelLogger')
     logger.info('{}'.format(model))
+    logDominantQuantizedOp(model, k=2, logger=logger)
 
 
 def train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, logger):
@@ -149,6 +165,7 @@ def train(train_queue, search_queue, args, model, architect, criterion, optimize
 
         arch_grad_norm = architect.step(input, target, input_search, target_search, lr, optimizer, unrolled=args.unrolled)
         grad.update(arch_grad_norm)
+        # TODO: bring it back to life
 
         optimizer.zero_grad()
         logits = model(input)
@@ -230,6 +247,10 @@ model = ResNet(criterion, args.nBitsMin, args.nBitsMax)
 model = model.cuda()
 # model = model.to(args.device)
 
+# load full-precision model
+path = '/home/yochaiz/darts/cnn/results/search-EXP-20180729-175054/model_opt.pth.tar'
+model.loadFromCheckpoint(path, logger, args.gpu[0])
+
 # print some attributes
 printModelToFile(model, args.save)
 logger.info('GPU:{}'.format(args.gpu))
@@ -237,9 +258,6 @@ logger.info("args = %s", args)
 logger.info("param size = %fMB", count_parameters_in_MB(model))
 logger.info('Learnable params:[{}]'.format(len(model.learnable_params)))
 logger.info('alphas tensor size:[{}]'.format(model.arch_parameters()[0].size()))
-# load full-precision model
-path = '/home/yochaiz/darts/cnn/results/search-EXP-20180729-115118/checkpoint_opt.pth.tar'
-model.loadFromCheckpoint(path, logger, args.gpu[0])
 
 optimizer = SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
 # optimizer = Adam(model.parameters(), lr=args.learning_rate,
@@ -304,27 +322,19 @@ for epoch in range(nEpochs):
     train_acc, train_loss = train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, trainLogger)
 
     # log accuracy, loss, etc.
-    message = 'Epoch:[{}] , training accuracy:[{:.3f}] , training loss:[{:.3f}] , optimizer_lr:[{}], scheduler_lr:[{}]' \
+    message = 'Epoch:[{}] , training accuracy:[{:.3f}] , training loss:[{:.3f}] , optimizer_lr:[{:.5f}], scheduler_lr:[{:.5f}]' \
         .format(epoch, train_acc, train_loss, optimizer.defaults['lr'], lr)
     logger.info(message)
     trainLogger.info(message)
 
     # log dominant QuantizedOp in each layer
-    k = 2
-    top = model.topOps(k=k)
-    trainLogger.info('=============================================')
-    trainLogger.info('Top [{}] quantizations per layer:'.format(k))
-    trainLogger.info('=============================================')
-    for i, layerTop in enumerate(top):
-        message = 'Layer:[{}]  '.format(i)
-        for w, layer in layerTop:
-            message += 'w:[{:.3f}]  bitwidth:{}  act_bitwidth:{}  ||  '.format(w, layer.bitwidth, layer.act_bitwidth)
-        trainLogger.info(message)
+    logDominantQuantizedOp(model, k=2, logger=trainLogger)
 
     # save model checkpoint
     save_checkpoint({
         'epoch': epoch + 1,
         'state_dict': model.state_dict(),
+        'alphas': model.arch_parameters(),
         'best_prec1': best_prec1,
     }, False, path=args.save)
 
@@ -342,6 +352,7 @@ for epoch in range(nEpochs):
         save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': model.state_dict(),
+            'alphas': model.arch_parameters(),
             'best_prec1': best_prec1,
         }, is_best, path=args.save)
 
