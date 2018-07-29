@@ -1,4 +1,4 @@
-from torch import tensor, randn
+from torch import tensor, randn, ones
 from torch import load as loadModel
 from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, AvgPool2d, Linear
 import torch.nn.functional as F
@@ -61,7 +61,9 @@ class MixedOp(Module):
         # init operations mixture
         self.ops = self.initOps()
         # init opretations alphas (weights)
-        self.alphas = tensor(randn(self.numOfOps()).cuda(), requires_grad=True)
+        # self.alphas = tensor(randn(self.numOfOps()).cuda(), requires_grad=True)
+        value = 1.0 / self.numOfOps()
+        self.alphas = tensor((ones(self.numOfOps()) * value).cuda(), requires_grad=True)
 
     @abstractmethod
     def initOps(self):
@@ -310,9 +312,14 @@ class ResNet(Module):
 
     def loadFromCheckpoint(self, path, logger, gpu):
         checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
+        # load model weights
         self.load_state_dict(checkpoint['state_dict'])
+        # load model alphas
+        for i, l in enumerate(self.layersList):
+            l.alphas = checkpoint['alphas'][i]
+
         logger.info('Loaded model from [{}]'.format(path))
-        logger.info('checkpoint accuracy:[{:.5f}]'.format(checkpoint['best_prec1']))
+        logger.info('checkpoint validation accuracy:[{:.5f}]'.format(checkpoint['best_prec1']))
 
     # def loadFromCheckpoint(self, path, logger, gpu):
     #     checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
