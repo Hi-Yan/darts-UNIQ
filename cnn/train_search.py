@@ -6,6 +6,7 @@ import glob
 import numpy as np
 import logging
 import argparse
+from shutil import copyfile
 
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.clip_grad import clip_grad_norm
@@ -17,6 +18,7 @@ import torch.backends.cudnn as cudnn
 from torch.cuda import is_available, set_device
 from torch.cuda import manual_seed as cuda_manual_seed
 from torch import manual_seed as torch_manual_seed
+from torch import save as saveModel
 from torch import no_grad
 from torch.optim import SGD, Adam
 from torch.autograd.variable import Variable
@@ -31,10 +33,10 @@ def parseArgs():
     parser = argparse.ArgumentParser("cifar")
     parser.add_argument('--data', type=str, default='/home/yochaiz/UNIQ/results', help='location of the data corpus')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size')
-    parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
+    parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
     parser.add_argument('--learning_rate_min', type=float, default=1E-8, help='min learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
-    parser.add_argument('--weight_decay', type=float, default=3e-4, help='weight decay')
+    parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay')
     parser.add_argument('--report_freq', type=float, default=1, help='report frequency')
     parser.add_argument('--gpu', type=str, default='0', help='gpu device id, e.g. 0,1,3')
     parser.add_argument('--epochs', type=str, default='5',
@@ -55,8 +57,8 @@ def parseArgs():
     parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
-    parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32), help='min number of bits')
-    parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32), help='max number of bits')
+    parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
+    parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     args = parser.parse_args()
 
     # convert epochs to list
@@ -72,6 +74,14 @@ def parseArgs():
     create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
 
     return args
+
+
+def save_checkpoint(state, is_best, path='.', filename='checkpoint'):
+    fileType = 'pth.tar'
+    default_filename = '{}/{}_checkpoint.{}'.format(path, filename, fileType)
+    saveModel(state, default_filename)
+    if is_best:
+        copyfile(default_filename, '{}/{}_opt.{}'.format(path, filename, fileType))
 
 
 def setup_logging(log_file, logger_name):
@@ -107,6 +117,12 @@ def initTrainLogger(logger_file_name, save_path):
     logger = setup_logging(log_file_path, logger_file_name)
 
     return logger
+
+
+def printModelToFile(model, save_path):
+    filePath = '{}/model.txt'.format(save_path)
+    logger = setup_logging(filePath, 'modelLogger')
+    logger.info('{}'.format(model))
 
 
 def train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, logger):
@@ -213,12 +229,15 @@ model = model.cuda()
 # model = model.to(args.device)
 
 # print some attributes
-logger.info('{}'.format(model))
+printModelToFile(model, args.save)
 logger.info('GPU:{}'.format(args.gpu))
 logger.info("args = %s", args)
 logger.info("param size = %fMB", count_parameters_in_MB(model))
 logger.info('Learnable params:[{}]'.format(len(model.learnable_params)))
 logger.info('alphas tensor size:[{}]'.format(model.arch_parameters()[0].size()))
+# load full-precision model
+path = '/home/yochaiz/darts/cnn/results/search-EXP-20180729-115118/checkpoint_opt.pth.tar'
+model.loadFromCheckpoint(path, logger, args.gpu[0])
 
 optimizer = SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
 # optimizer = Adam(model.parameters(), lr=args.learning_rate,
@@ -229,10 +248,10 @@ train_data = CIFAR10(root=args.data, train=True, download=True, transform=train_
 valid_data = CIFAR10(root=args.data, train=False, download=True, transform=valid_transform)
 
 #### narrow data for debug purposes
-train_data.train_data = train_data.train_data[0:640]
-train_data.train_labels = train_data.train_labels[0:640]
-valid_data.test_data = valid_data.test_data[0:320]
-valid_data.test_labels = valid_data.test_labels[0:320]
+# train_data.train_data = train_data.train_data[0:640]
+# train_data.train_labels = train_data.train_labels[0:640]
+# valid_data.test_data = valid_data.test_data[0:320]
+# valid_data.test_labels = valid_data.test_labels[0:320]
 ####
 
 num_train = len(train_data)
@@ -266,21 +285,10 @@ logger.info('epochsSwitchStage:{}'.format(epochsSwitchStage))
 scheduler = CosineAnnealingLR(optimizer, float(nEpochs), eta_min=args.learning_rate_min)
 architect = Architect(model, args)
 
+best_prec1 = 0.0
+
 for epoch in range(nEpochs):
     trainLogger = initTrainLogger(str(epoch), args.save)
-    # switch stage, i.e. freeze one more layer
-    if epoch in epochsSwitchStage:
-        # validation
-        valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
-        message = 'Epoch:[{}] , validation accuracy:[{:.3f}] , validation loss:[{:.3f}]'.format(epoch, valid_acc, valid_loss)
-        logger.info(message)
-        trainLogger.info(message)
-        # switch stage
-        model.switch_stage(trainLogger)
-        # update optimizer & scheduler due to update in learnable params
-        optimizer = SGD(model.parameters(), scheduler.get_lr()[0],
-                        momentum=args.momentum, weight_decay=args.weight_decay)
-        scheduler = CosineAnnealingLR(optimizer, float(nEpochs), eta_min=args.learning_rate_min)
 
     scheduler.step()
     lr = scheduler.get_lr()[0]
@@ -310,5 +318,29 @@ for epoch in range(nEpochs):
         for w, layer in layerTop:
             message += 'w:[{:.3f}]  bitwidth:{}  act_bitwidth:{}  ||  '.format(w, layer.bitwidth, layer.act_bitwidth)
         trainLogger.info(message)
+
+    # switch stage, i.e. freeze one more layer
+    if epoch in epochsSwitchStage:
+        # validation
+        valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
+        message = 'Epoch:[{}] , validation accuracy:[{:.3f}] , validation loss:[{:.3f}]'.format(epoch, valid_acc,
+                                                                                                valid_loss)
+        logger.info(message)
+        trainLogger.info(message)
+
+        # is_best = valid_acc > best_prec1
+        # best_prec1 = max(valid_acc, best_prec1)
+        # save_checkpoint({
+        #     'epoch': epoch + 1,
+        #     'state_dict': model.state_dict(),
+        #     'best_prec1': best_prec1,
+        # }, is_best, path=args.save)
+
+        # switch stage
+        model.switch_stage(trainLogger)
+        # update optimizer & scheduler due to update in learnable params
+        optimizer = SGD(model.parameters(), scheduler.get_lr()[0],
+                        momentum=args.momentum, weight_decay=args.weight_decay)
+        scheduler = CosineAnnealingLR(optimizer, float(nEpochs), eta_min=args.learning_rate_min)
 
 save(model, os.path.join(args.save, 'weights.pt'))
