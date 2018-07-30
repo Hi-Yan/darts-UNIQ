@@ -1,6 +1,6 @@
 from torch import tensor, randn, ones
 from torch import load as loadModel
-from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, AvgPool2d, Linear
+from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, AvgPool2d, Linear, ReLU
 import torch.nn.functional as F
 from UNIQ.uniq import UNIQNet
 from UNIQ.actquant import ActQuant
@@ -92,6 +92,7 @@ class MixedLinear(MixedOp):
         for bitwidth in [1, 4, 16]:
             op = Linear(self.in_features, self.out_features)
             ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
+            # ops.append(op)
 
         return ops
 
@@ -117,6 +118,7 @@ class MixedConv(MixedOp):
                 BatchNorm2d(self.out_planes)
             )
             ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
+            # ops.append(op)
 
         return ops
 
@@ -142,7 +144,6 @@ class MixedConvWithReLU(MixedOp):
         #     for act_bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
         for bitwidth in [1, 4, 16]:
             act_bitwidth = bitwidth
-
             op = Sequential(
                 Sequential(
                     Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
@@ -150,14 +151,28 @@ class MixedConvWithReLU(MixedOp):
                     BatchNorm2d(self.out_planes)
                 ),
                 ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
+                # ReLU(inplace=True)
             )
             ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
+            # ops.append(op)
 
         return ops
 
     def residualForward(self, x, residual):
         weights = F.softmax(self.alphas, dim=-1)
         return sum(w * op(x, residual) for w, op in zip(weights, self.ops))
+
+    # for standard op, without QuantizedOp wrapping
+    # def residualForward(self, x, residual):
+    #     weights = F.softmax(self.alphas, dim=-1)
+    #     opsForward = []
+    #     for op in self.ops:
+    #         out = op[0](x)
+    #         out += residual
+    #         out = op[1](out)
+    #         opsForward.append(out)
+    #
+    #     return sum(w * p for w, p in zip(weights, opsForward))
 
 
 class BasicBlock(Module):
