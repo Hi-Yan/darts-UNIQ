@@ -316,8 +316,13 @@ class ResNet(Module):
         # load model weights
         self.load_state_dict(checkpoint['state_dict'])
         # load model alphas
-        for i, l in enumerate(self.layersList):
-            l.alphas = checkpoint['alphas'][i]
+        if 'alphas' in checkpoint:
+            for i, l in enumerate(self.layersList):
+                l.alphas = checkpoint['alphas'][i]
+
+        # load nLayersQuantCompleted
+        if 'nLayersQuantCompleted' in checkpoint:
+            self.nLayersQuantCompleted = checkpoint['nLayersQuantCompleted']
 
         logger.info('Loaded model from [{}]'.format(path))
         logger.info('checkpoint validation accuracy:[{:.5f}]'.format(checkpoint['best_prec1']))
