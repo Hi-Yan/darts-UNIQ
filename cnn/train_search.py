@@ -264,3 +264,4 @@ for epoch in range(1, nEpochs + 1):
         scheduler = CosineAnnealingLR(optimizer, float(nEpochs), eta_min=args.learning_rate_min)
 
 save(model, os.path.join(args.save, 'weights.pt'))
+logger.info('Done !')
