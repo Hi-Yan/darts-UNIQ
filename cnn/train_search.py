@@ -1,12 +1,9 @@
-# import torch.nn.functional as F
 import os
-from sys import stdout, exit
+from sys import exit
 from time import time, strftime
 import glob
 import numpy as np
-import logging
 import argparse
-from shutil import copyfile
 
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.clip_grad import clip_grad_norm
@@ -18,12 +15,12 @@ import torch.backends.cudnn as cudnn
 from torch.cuda import is_available, set_device
 from torch.cuda import manual_seed as cuda_manual_seed
 from torch import manual_seed as torch_manual_seed
-from torch import save as saveModel
 from torch import no_grad
 from torch.optim import SGD, Adam
 from torch.autograd.variable import Variable
 
 from cnn.utils import create_exp_dir, count_parameters_in_MB, _data_transforms_cifar10, accuracy, AvgrageMeter, save
+from cnn.utils import initLogger, printModelToFile, initTrainLogger, logDominantQuantizedOp, save_checkpoint
 from cnn.model_search import Network
 from cnn.resnet_model_search import ResNet
 from cnn.architect import Architect
@@ -58,6 +55,8 @@ def parseArgs():
     parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
+    parser.add_argument('--checkpoint', type=str,
+                        default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     args = parser.parse_args()
@@ -75,71 +74,6 @@ def parseArgs():
     create_exp_dir(args.save, scripts_to_save=glob.glob('*.py'))
 
     return args
-
-
-def save_checkpoint(state, is_best, path='.', filename='model'):
-    fileType = 'pth.tar'
-    default_filename = '{}/{}_checkpoint.{}'.format(path, filename, fileType)
-    saveModel(state, default_filename)
-    if is_best:
-        copyfile(default_filename, '{}/{}_opt.{}'.format(path, filename, fileType))
-
-
-def setup_logging(log_file, logger_name, propagate=False):
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-    handler = logging.FileHandler(log_file)
-    handler.setFormatter(formatter)
-
-    logger = logging.getLogger(logger_name)
-    logger.setLevel(logging.INFO)
-    logger.addHandler(handler)
-    # logging to stdout
-    logger.propagate = propagate
-
-    return logger
-
-
-def initLogger(folderName, propagate=False):
-    filePath = '{}/log.txt'.format(folderName)
-    logger = setup_logging(filePath, 'darts', propagate)
-
-    logger.info('Experiment dir: [{}]'.format(folderName))
-
-    return logger
-
-
-def initTrainLogger(logger_file_name, save_path, propagate=False):
-    folder_path = '{}/train'.format(save_path)
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-
-    log_file_path = '{}/{}.txt'.format(folder_path, logger_file_name)
-    logger = setup_logging(log_file_path, logger_file_name, propagate)
-
-    return logger
-
-
-def logDominantQuantizedOp(model, k, logger):
-    top = model.topOps(k=k)
-    logger.info('=============================================')
-    logger.info('Top [{}] quantizations per layer:'.format(k))
-    logger.info('=============================================')
-    for i, layerTop in enumerate(top):
-        message = 'Layer:[{}]  '.format(i)
-        for w, layer in layerTop:
-            message += 'w:[{:.3f}]  bitwidth:{}  act_bitwidth:{}  ||  '.format(w, layer.bitwidth, layer.act_bitwidth)
-
-        logger.info(message)
-
-    logger.info('=============================================')
-
-
-def printModelToFile(model, save_path):
-    filePath = '{}/model.txt'.format(save_path)
-    logger = setup_logging(filePath, 'modelLogger')
-    logger.info('{}'.format(model))
-    logDominantQuantizedOp(model, k=2, logger=logger)
 
 
 def train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, logger):
@@ -294,9 +228,9 @@ epochsSwitchStage = [0]
 for e in args.epochs:
     epochsSwitchStage.append(e + epochsSwitchStage[-1])
 # total number of epochs is the last value in epochsSwitchStage
-nEpochs = epochsSwitchStage[-1]
-# remove epoch 0 from list, and last switch, since after last switch there are no layers to quantize
-epochsSwitchStage = epochsSwitchStage[1:-1]
+nEpochs = epochsSwitchStage[-1] + 1
+# remove epoch 0 from list, we don't want to switch stage at the beginning
+epochsSwitchStage = epochsSwitchStage[1:]
 
 logger.info('nEpochs:[{}]'.format(nEpochs))
 logger.info('epochsSwitchStage:{}'.format(epochsSwitchStage))
@@ -306,7 +240,7 @@ architect = Architect(model, args)
 
 best_prec1 = 0.0
 
-for epoch in range(nEpochs):
+for epoch in range(1, nEpochs + 1):
     trainLogger = initTrainLogger(str(epoch), args.save, args.propagate)
 
     scheduler.step()
@@ -330,12 +264,7 @@ for epoch in range(nEpochs):
     logDominantQuantizedOp(model, k=2, logger=trainLogger)
 
     # save model checkpoint
-    save_checkpoint({
-        'epoch': epoch + 1,
-        'state_dict': model.state_dict(),
-        'alphas': model.arch_parameters(),
-        'best_prec1': best_prec1,
-    }, False, path=args.save)
+    save_checkpoint(args.save, model, epoch, is_best=False)
 
     # switch stage, i.e. freeze one more layer
     if epoch in epochsSwitchStage:
@@ -346,14 +275,10 @@ for epoch in range(nEpochs):
         logger.info(message)
         trainLogger.info(message)
 
+        # save model checkpoint
         is_best = valid_acc > best_prec1
         best_prec1 = max(valid_acc, best_prec1)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'alphas': model.arch_parameters(),
-            'best_prec1': best_prec1,
-        }, is_best, path=args.save)
+        save_checkpoint(args.save, model, epoch, is_best)
 
         # switch stage
         model.switch_stage(trainLogger)
