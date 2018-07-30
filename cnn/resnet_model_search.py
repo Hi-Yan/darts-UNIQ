@@ -70,7 +70,8 @@ class MixedOp(Module):
         raise NotImplementedError('subclasses must override initOps()!')
 
     def forward(self, x):
-        return sum(a * op(x) for a, op in zip(self.alphas, self.ops))
+        weights = F.softmax(self.alphas, dim=-1)
+        return sum(w * op(x) for w, op in zip(weights, self.ops))
 
     def numOfOps(self):
         return len(self.ops)
@@ -155,7 +156,8 @@ class MixedConvWithReLU(MixedOp):
         return ops
 
     def residualForward(self, x, residual):
-        return sum(a * op(x, residual) for a, op in zip(self.alphas, self.ops))
+        weights = F.softmax(self.alphas, dim=-1)
+        return sum(w * op(x, residual) for w, op in zip(weights, self.ops))
 
 
 class BasicBlock(Module):
