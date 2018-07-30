@@ -7,10 +7,7 @@ import argparse
 
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.clip_grad import clip_grad_norm
-from torch.utils.data.dataloader import DataLoader
-from torch.utils.data.sampler import SubsetRandomSampler
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torchvision.datasets.cifar import CIFAR10
 import torch.backends.cudnn as cudnn
 from torch.cuda import is_available, set_device
 from torch.cuda import manual_seed as cuda_manual_seed
@@ -19,8 +16,9 @@ from torch import no_grad
 from torch.optim import SGD, Adam
 from torch.autograd.variable import Variable
 
-from cnn.utils import create_exp_dir, count_parameters_in_MB, _data_transforms_cifar10, accuracy, AvgrageMeter, save
+from cnn.utils import create_exp_dir, count_parameters_in_MB, accuracy, AvgrageMeter, save
 from cnn.utils import initLogger, printModelToFile, initTrainLogger, logDominantQuantizedOp, save_checkpoint
+from cnn.utils import load_data, load_checkpoint
 from cnn.model_search import Network
 from cnn.resnet_model_search import ResNet
 from cnn.architect import Architect
@@ -179,10 +177,8 @@ model = ResNet(criterion, args.nBitsMin, args.nBitsMax)
 # model = DataParallel(model, args.gpu)
 model = model.cuda()
 # model = model.to(args.device)
-
 # load full-precision model
-path = '/home/yochaiz/darts/cnn/results/search-EXP-20180729-175054/model_opt.pth.tar'
-model.loadFromCheckpoint(path, logger, args.gpu[0])
+load_checkpoint(args.checkpoint, model, logger, args.gpu[0])
 
 # print some attributes
 printModelToFile(model, args.save)
@@ -196,29 +192,8 @@ optimizer = SGD(model.parameters(), args.learning_rate, momentum=args.momentum, 
 # optimizer = Adam(model.parameters(), lr=args.learning_rate,
 #                  betas=(0.5, 0.999), weight_decay=args.weight_decay)
 
-train_transform, valid_transform = _data_transforms_cifar10(args)
-train_data = CIFAR10(root=args.data, train=True, download=True, transform=train_transform)
-valid_data = CIFAR10(root=args.data, train=False, download=True, transform=valid_transform)
-
-#### narrow data for debug purposes
-# train_data.train_data = train_data.train_data[0:640]
-# train_data.train_labels = train_data.train_labels[0:640]
-# valid_data.test_data = valid_data.test_data[0:320]
-# valid_data.test_labels = valid_data.test_labels[0:320]
-####
-
-num_train = len(train_data)
-indices = list(range(num_train))
-split = int(np.floor(args.train_portion * num_train))
-
-train_queue = DataLoader(train_data, batch_size=args.batch_size,
-                         sampler=SubsetRandomSampler(indices[:split]), pin_memory=True, num_workers=args.workers)
-
-search_queue = DataLoader(train_data, batch_size=args.batch_size, sampler=SubsetRandomSampler(indices[split:num_train]),
-                          pin_memory=True, num_workers=args.workers)
-
-valid_queue = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False,
-                         pin_memory=True, num_workers=args.workers)
+# load data
+train_queue, search_queue, valid_queue = load_data(args)
 
 # extend epochs list as number of model layers
 while len(args.epochs) < model.nLayers():
