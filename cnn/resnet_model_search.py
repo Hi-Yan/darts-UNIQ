@@ -7,6 +7,8 @@ from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
 from abc import abstractmethod
 
+bitwidths = [3]
+
 
 def save_quant_state(self, _):
     assert (self.noise is False)
@@ -89,7 +91,7 @@ class MixedLinear(MixedOp):
     def initOps(self):
         ops = ModuleList()
         # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        for bitwidth in [1, 4, 16]:
+        for bitwidth in bitwidths:
             op = Linear(self.in_features, self.out_features)
             ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
             # ops.append(op)
@@ -111,7 +113,7 @@ class MixedConv(MixedOp):
     def initOps(self):
         ops = ModuleList()
         # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        for bitwidth in [1, 4, 16]:
+        for bitwidth in bitwidths:
             op = Sequential(
                 Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
                        stride=self.stride, padding=1, bias=False),
@@ -142,7 +144,7 @@ class MixedConvWithReLU(MixedOp):
         ops = ModuleList()
         # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
         #     for act_bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        for bitwidth in [1, 4, 16]:
+        for bitwidth in bitwidths:
             act_bitwidth = bitwidth
             op = Sequential(
                 Sequential(
@@ -286,19 +288,19 @@ class ResNet(Module):
         top = []
         for layer in self.layersList:
             # calc weights from alphas and sort them
-            # weights = F.softmax(layer.alphas, dim=-1)
-            weights = layer.alphas
+            weights = F.softmax(layer.alphas, dim=-1)
+            # weights = layer.alphas
             wSorted, wIndices = weights.sort(descending=True)
             # keep only top-k
             wSorted = wSorted[:k]
             wIndices = wIndices[:k]
             # add to top
-            top.append([(w.item(), layer.ops[i]) for w, i in zip(wSorted, wIndices)])
+            top.append([(w.item(), layer.alphas[i], layer.ops[i]) for w, i in zip(wSorted, wIndices)])
 
         return top
 
     def switch_stage(self, logger=None):
-        #TODO: freeze stage alphas as well ???
+        # TODO: freeze stage alphas as well ???
         if self.nLayersQuantCompleted + 1 < len(self.layersList):
             layer = self.layersList[self.nLayersQuantCompleted]
             for op in layer.ops:
