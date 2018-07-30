@@ -27,7 +27,7 @@ from cnn.architect import Architect
 def parseArgs():
     parser = argparse.ArgumentParser("cifar")
     parser.add_argument('--data', type=str, required=True, help='location of the data corpus')
-    parser.add_argument('--batch_size', type=int, default=32, help='batch size')
+    parser.add_argument('--batch_size', type=int, default=256, help='batch size')
     parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
     parser.add_argument('--learning_rate_min', type=float, default=1E-8, help='min learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
@@ -53,8 +53,8 @@ def parseArgs():
     parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
-    parser.add_argument('--checkpoint', type=str,
-                        default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
+    parser.add_argument('--checkpoint', type=str, default=None)
+    # default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     args = parser.parse_args()
