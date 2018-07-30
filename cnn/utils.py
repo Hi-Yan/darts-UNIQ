@@ -6,6 +6,9 @@ import logging
 import torchvision.transforms as transforms
 from torch.autograd import Variable
 from torch import save as saveModel
+from torch.utils.data.dataloader import DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
+from torchvision.datasets.cifar import CIFAR10
 
 
 class AvgrageMeter(object):
@@ -126,6 +129,11 @@ def save_checkpoint(path, model, epoch, is_best=False):
     save_state(state, is_best, path=path)
 
 
+def load_checkpoint(path, model, logger, gpu):
+    if (path is not None) and os.path.exists(path):
+        model.loadFromCheckpoint(path, logger, gpu)
+
+
 def setup_logging(log_file, logger_name, propagate=False):
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
@@ -181,3 +189,31 @@ def printModelToFile(model, save_path):
     logger = setup_logging(filePath, 'modelLogger')
     logger.info('{}'.format(model))
     logDominantQuantizedOp(model, k=2, logger=logger)
+
+
+def load_data(args):
+    train_transform, valid_transform = _data_transforms_cifar10(args)
+    train_data = CIFAR10(root=args.data, train=True, download=True, transform=train_transform)
+    valid_data = CIFAR10(root=args.data, train=False, download=True, transform=valid_transform)
+
+    #### narrow data for debug purposes
+    # train_data.train_data = train_data.train_data[0:640]
+    # train_data.train_labels = train_data.train_labels[0:640]
+    # valid_data.test_data = valid_data.test_data[0:320]
+    # valid_data.test_labels = valid_data.test_labels[0:320]
+    ####
+
+    num_train = len(train_data)
+    indices = list(range(num_train))
+    split = int(np.floor(args.train_portion * num_train))
+
+    train_queue = DataLoader(train_data, batch_size=args.batch_size,
+                             sampler=SubsetRandomSampler(indices[:split]), pin_memory=True, num_workers=args.workers)
+
+    search_queue = DataLoader(train_data, batch_size=args.batch_size, sampler=SubsetRandomSampler(indices[split:num_train]),
+                              pin_memory=True, num_workers=args.workers)
+
+    valid_queue = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False,
+                             pin_memory=True, num_workers=args.workers)
+
+    return train_queue, search_queue, valid_queue
