@@ -281,7 +281,7 @@ class ResNet(Module):
         return top
 
     def switch_stage(self, logger=None):
-        if self.nLayersQuantCompleted < len(self.layersList):
+        if self.nLayersQuantCompleted + 1 < len(self.layersList):
             layer = self.layersList[self.nLayersQuantCompleted]
             for op in layer.ops:
                 # turn off noise in op
