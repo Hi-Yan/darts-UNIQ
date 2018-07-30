@@ -276,39 +276,40 @@ class ResNet(Module):
         return top
 
     def switch_stage(self, logger=None):
-        layer = self.layersList[self.nLayersQuantCompleted]
-        for op in layer.ops:
-            # turn of noise in op
-            assert (op.noise is True)
-            op.noise = False
+        if self.nLayersQuantCompleted < len(self.layersList):
+            layer = self.layersList[self.nLayersQuantCompleted]
+            for op in layer.ops:
+                # turn off noise in op
+                assert (op.noise is True)
+                op.noise = False
 
-            # set pre & post quantization hooks, from now on we want to quantize these ops
-            op.register_forward_pre_hook(save_quant_state)
-            op.register_forward_hook(restore_quant_state)
+                # set pre & post quantization hooks, from now on we want to quantize these ops
+                op.register_forward_pre_hook(save_quant_state)
+                op.register_forward_hook(restore_quant_state)
 
-            # turn of gradients
-            for m in op.modules():
-                if isinstance(m, Conv2d):
-                    for param in m.parameters():
-                        param.requires_grad = False
-                elif isinstance(m, ActQuant):
-                    m.quatize_during_training = True
-                    m.noise_during_training = False
+                # turn off gradients
+                for m in op.modules():
+                    if isinstance(m, Conv2d):
+                        for param in m.parameters():
+                            param.requires_grad = False
+                    elif isinstance(m, ActQuant):
+                        m.quatize_during_training = True
+                        m.noise_during_training = False
 
-        # update learnable parameters
-        self.learnable_params = [param for param in self.parameters() if param.requires_grad]
+            # update learnable parameters
+            self.learnable_params = [param for param in self.parameters() if param.requires_grad]
 
-        # we have completed quantization of one more layer
-        self.nLayersQuantCompleted += 1
+            # we have completed quantization of one more layer
+            self.nLayersQuantCompleted += 1
 
-        # turn on noise in the new layer we want to quantize
-        layer = self.layersList[self.nLayersQuantCompleted]
-        for op in layer.ops:
-            op.noise = True
+            # turn on noise in the new layer we want to quantize
+            layer = self.layersList[self.nLayersQuantCompleted]
+            for op in layer.ops:
+                op.noise = True
 
-        if logger:
-            logger.info('Switching stage, nLayersQuantCompleted:[{}], learnable_params:[{}]'
-                        .format(self.nLayersQuantCompleted, len(self.learnable_params)))
+            if logger:
+                logger.info('Switching stage, nLayersQuantCompleted:[{}], learnable_params:[{}]'
+                            .format(self.nLayersQuantCompleted, len(self.learnable_params)))
 
     def loadFromCheckpoint(self, path, logger, gpu):
         checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
