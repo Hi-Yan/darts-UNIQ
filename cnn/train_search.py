@@ -55,7 +55,7 @@ def parseArgs():
 
     parser.add_argument('--checkpoint', type=str,
                         # default=None)
-                        default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18_old/model_opt.pth.tar')
+                        default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     args = parser.parse_args()
@@ -237,7 +237,7 @@ for epoch in range(1, nEpochs + 1):
     trainLogger.info(message)
 
     # log dominant QuantizedOp in each layer
-    logDominantQuantizedOp(model, k=2, logger=trainLogger)
+    logDominantQuantizedOp(model, k=3, logger=trainLogger)
 
     # save model checkpoint
     save_checkpoint(args.save, model, epoch, best_prec1, is_best=False)
