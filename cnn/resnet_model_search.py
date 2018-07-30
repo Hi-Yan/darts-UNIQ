@@ -298,6 +298,7 @@ class ResNet(Module):
         return top
 
     def switch_stage(self, logger=None):
+        #TODO: freeze stage alphas as well ???
         if self.nLayersQuantCompleted + 1 < len(self.layersList):
             layer = self.layersList[self.nLayersQuantCompleted]
             for op in layer.ops:
@@ -366,15 +367,15 @@ class ResNet(Module):
         # load model weights
         self.load_state_dict(checkpoint['state_dict'])
         # load model alphas
-        if 'alphas' in checkpoint:
-            for i, l in enumerate(self.layersList):
-                layerChkpntAlphas = checkpoint['alphas'][i]
-                assert (layerChkpntAlphas.size() <= l.alphas.size())
-                l.alphas = layerChkpntAlphas.expand_as(l.alphas)
+        # if 'alphas' in checkpoint:
+        #     for i, l in enumerate(self.layersList):
+        #         layerChkpntAlphas = checkpoint['alphas'][i]
+        #         assert (layerChkpntAlphas.size() <= l.alphas.size())
+        #         l.alphas = layerChkpntAlphas.expand_as(l.alphas)
 
         # load nLayersQuantCompleted
-        if 'nLayersQuantCompleted' in checkpoint:
-            self.nLayersQuantCompleted = checkpoint['nLayersQuantCompleted']
+        # if 'nLayersQuantCompleted' in checkpoint:
+        #     self.nLayersQuantCompleted = checkpoint['nLayersQuantCompleted']
 
         logger.info('Loaded model from [{}]'.format(path))
         logger.info('checkpoint validation accuracy:[{:.5f}]'.format(checkpoint['best_prec1']))
