@@ -124,8 +124,9 @@ def save_state(state, is_best, path='.', filename='model'):
         copyfile(default_filename, '{}/{}_opt.{}'.format(path, filename, fileType))
 
 
-def save_checkpoint(path, model, epoch, is_best=False):
-    state = dict(epoch=epoch + 1, state_dict=model.state_dict(), alphas=model.arch_parameters(), best_prec1=best_prec1)
+def save_checkpoint(path, model, epoch, best_prec1, is_best=False):
+    state = dict(epoch=epoch + 1, state_dict=model.state_dict(), alphas=model.arch_parameters(),
+                 nLayersQuantCompleted=model.nLayersQuantCompleted, best_prec1=best_prec1)
     save_state(state, is_best, path=path)
 
 
