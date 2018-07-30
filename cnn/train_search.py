@@ -53,8 +53,9 @@ def parseArgs():
     parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
-    parser.add_argument('--checkpoint', type=str, default=None)
-    # default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
+    parser.add_argument('--checkpoint', type=str,
+                        # default=None)
+                        default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18_old/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     args = parser.parse_args()
@@ -242,7 +243,7 @@ for epoch in range(1, nEpochs + 1):
     save_checkpoint(args.save, model, epoch, best_prec1, is_best=False)
 
     # switch stage, i.e. freeze one more layer
-    if epoch in epochsSwitchStage:
+    if (epoch in epochsSwitchStage) or (epoch == nEpochs):
         # validation
         valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
         message = 'Epoch:[{}] , validation accuracy:[{:.3f}] , validation loss:[{:.3f}]'.format(epoch, valid_acc,
