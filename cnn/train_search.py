@@ -239,7 +239,7 @@ for epoch in range(1, nEpochs + 1):
     logDominantQuantizedOp(model, k=2, logger=trainLogger)
 
     # save model checkpoint
-    save_checkpoint(args.save, model, epoch, is_best=False)
+    save_checkpoint(args.save, model, epoch, best_prec1, is_best=False)
 
     # switch stage, i.e. freeze one more layer
     if epoch in epochsSwitchStage:
@@ -253,7 +253,7 @@ for epoch in range(1, nEpochs + 1):
         # save model checkpoint
         is_best = valid_acc > best_prec1
         best_prec1 = max(valid_acc, best_prec1)
-        save_checkpoint(args.save, model, epoch, is_best)
+        save_checkpoint(args.save, model, epoch, best_prec1, is_best)
 
         # switch stage
         model.switch_stage(trainLogger)
