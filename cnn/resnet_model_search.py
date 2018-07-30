@@ -60,7 +60,7 @@ class MixedOp(Module):
 
         # init operations mixture
         self.ops = self.initOps()
-        # init opretations alphas (weights)
+        # init operations alphas (weights)
         # self.alphas = tensor(randn(self.numOfOps()).cuda(), requires_grad=True)
         value = 1.0 / self.numOfOps()
         self.alphas = tensor((ones(self.numOfOps()) * value).cuda(), requires_grad=True)
@@ -87,7 +87,8 @@ class MixedLinear(MixedOp):
 
     def initOps(self):
         ops = ModuleList()
-        for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+        # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+        for bitwidth in [1, 4, 16]:
             op = Linear(self.in_features, self.out_features)
             ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
 
@@ -107,7 +108,8 @@ class MixedConv(MixedOp):
 
     def initOps(self):
         ops = ModuleList()
-        for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+        # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+        for bitwidth in [1, 4, 16]:
             op = Sequential(
                 Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
                        stride=self.stride, padding=1, bias=False),
@@ -135,17 +137,20 @@ class MixedConvWithReLU(MixedOp):
 
     def initOps(self):
         ops = ModuleList()
-        for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-            for act_bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-                op = Sequential(
-                    Sequential(
-                        Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
-                               stride=self.stride, padding=1, bias=False),
-                        BatchNorm2d(self.out_planes)
-                    ),
-                    ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
-                )
-                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
+        # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+        #     for act_bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
+        for bitwidth in [1, 4, 16]:
+            act_bitwidth = bitwidth
+
+            op = Sequential(
+                Sequential(
+                    Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
+                           stride=self.stride, padding=1, bias=False),
+                    BatchNorm2d(self.out_planes)
+                ),
+                ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
+            )
+            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
 
         return ops
 
@@ -313,12 +318,42 @@ class ResNet(Module):
 
     def loadFromCheckpoint(self, path, logger, gpu):
         checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
+        # split state_dict keys by model layers
+        layerKeys = {}  # collect ALL layer keys in state_dict
+        layerOp0Keys = {}  # collect ONLY layer.ops.0. keys in state_dict, for duplication to the rest of layer ops
+        token = '.ops.'
+        for key in checkpoint['state_dict'].keys():
+            prefix = key[:key.index(token)]
+            isKey0 = prefix + token + '0.' in key
+            if prefix in layerKeys:
+                layerKeys[prefix].append(key)
+                if isKey0: layerOp0Keys[prefix].append(key)
+            else:
+                layerKeys[prefix] = [key]
+                if isKey0: layerOp0Keys[prefix] = [key]
+        # duplicate state_dict values according to number of ops in each model layer
+        for layerKey in layerKeys.keys():
+            # init path to layer
+            layerPath = [p for p in layerKey.split('.')]
+            # get layer by walking through path
+            layer = self
+            for p in layerPath:
+                layer = getattr(layer, p)
+            # add missing layer operations to state_dict
+            for stateKey in layerOp0Keys[layerKey]:
+                for i in range(len(layer.ops)):
+                    newKey = stateKey.replace(layerKey + token + '0.', layerKey + token + '{}.'.format(i))
+                    if newKey not in layerKeys[layerKey]:
+                        checkpoint['state_dict'][newKey] = checkpoint['state_dict'][stateKey]
+
         # load model weights
         self.load_state_dict(checkpoint['state_dict'])
         # load model alphas
         if 'alphas' in checkpoint:
             for i, l in enumerate(self.layersList):
-                l.alphas = checkpoint['alphas'][i]
+                layerChkpntAlphas = checkpoint['alphas'][i]
+                assert (layerChkpntAlphas.size() <= l.alphas.size())
+                l.alphas = layerChkpntAlphas.expand_as(l.alphas)
 
         # load nLayersQuantCompleted
         if 'nLayersQuantCompleted' in checkpoint:
@@ -327,224 +362,224 @@ class ResNet(Module):
         logger.info('Loaded model from [{}]'.format(path))
         logger.info('checkpoint validation accuracy:[{:.5f}]'.format(checkpoint['best_prec1']))
 
-    # def loadFromCheckpoint(self, path, logger, gpu):
-    #     checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
-    #
-    #     for i in range(self.block1.numOfOps()):
-    #         self.block1.ops[i]._modules['op'][0][0].weight.data.copy_(checkpoint['state_dict']['conv1.weight'])
-    #         self.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['bn1.weight'])
-    #         self.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['bn1.bias'])
-    #         self.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(checkpoint['state_dict']['bn1.running_var'])
-    #         self.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(checkpoint['state_dict']['bn1.running_mean'])
-    #
-    #     for i in range(self.block2.block1.numOfOps()):
-    #         self.block2.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer1.0.conv1.weight'])
-    #         self.block2.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.0.bn1.weight'])
-    #         self.block2.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.0.bn1.bias'])
-    #         self.block2.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer1.0.bn1.running_var'])
-    #         self.block2.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer1.0.bn1.running_mean'])
-    #
-    #     for i in range(self.block2.block2.numOfOps()):
-    #         self.block2.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer1.0.conv2.weight'])
-    #         self.block2.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.0.bn2.weight'])
-    #         self.block2.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.0.bn2.bias'])
-    #         self.block2.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer1.0.bn2.running_var'])
-    #         self.block2.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer1.0.bn2.running_mean'])
-    #
-    #     for i in range(self.block3.block1.numOfOps()):
-    #         self.block3.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer1.1.conv1.weight'])
-    #         self.block3.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.1.bn1.weight'])
-    #         self.block3.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.1.bn1.bias'])
-    #         self.block3.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer1.1.bn1.running_var'])
-    #         self.block3.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer1.1.bn1.running_mean'])
-    #
-    #     for i in range(self.block3.block2.numOfOps()):
-    #         self.block3.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer1.1.conv2.weight'])
-    #         self.block3.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.1.bn2.weight'])
-    #         self.block3.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.1.bn2.bias'])
-    #         self.block3.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer1.1.bn2.running_var'])
-    #         self.block3.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer1.1.bn2.running_mean'])
-    #
-    #     for i in range(self.block4.block1.numOfOps()):
-    #         self.block4.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer1.2.conv1.weight'])
-    #         self.block4.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.2.bn1.weight'])
-    #         self.block4.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.2.bn1.bias'])
-    #         self.block4.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer1.2.bn1.running_var'])
-    #         self.block4.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer1.2.bn1.running_mean'])
-    #
-    #     for i in range(self.block4.block2.numOfOps()):
-    #         self.block4.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer1.2.conv2.weight'])
-    #         self.block4.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.2.bn2.weight'])
-    #         self.block4.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.2.bn2.bias'])
-    #         self.block4.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer1.2.bn2.running_var'])
-    #         self.block4.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer1.2.bn2.running_mean'])
-    #
-    #     for i in range(self.block5.block1.numOfOps()):
-    #         self.block5.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.conv1.weight'])
-    #         self.block5.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.0.bn1.weight'])
-    #         self.block5.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.0.bn1.bias'])
-    #         self.block5.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.bn1.running_var'])
-    #         self.block5.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.bn1.running_mean'])
-    #
-    #     for i in range(self.block5.block2.numOfOps()):
-    #         self.block5.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.conv2.weight'])
-    #         self.block5.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.0.bn2.weight'])
-    #         self.block5.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.0.bn2.bias'])
-    #         self.block5.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.bn2.running_var'])
-    #         self.block5.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.bn2.running_mean'])
-    #
-    #     for i in range(self.block5.downsample.numOfOps()):
-    #         self.block5.downsample.ops[i]._modules['op'][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.downsample.0.weight'])
-    #         self.block5.downsample.ops[i]._modules['op'][1].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.downsample.1.weight'])
-    #         self.block5.downsample.ops[i]._modules['op'][1].bias.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.downsample.1.bias'])
-    #         self.block5.downsample.ops[i]._modules['op'][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.downsample.1.running_var'])
-    #         self.block5.downsample.ops[i]._modules['op'][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.0.downsample.1.running_mean'])
-    #
-    #     for i in range(self.block6.block1.numOfOps()):
-    #         self.block6.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.1.conv1.weight'])
-    #         self.block6.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.1.bn1.weight'])
-    #         self.block6.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.1.bn1.bias'])
-    #         self.block6.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.1.bn1.running_var'])
-    #         self.block6.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.1.bn1.running_mean'])
-    #
-    #     for i in range(self.block6.block2.numOfOps()):
-    #         self.block6.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.1.conv2.weight'])
-    #         self.block6.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.1.bn2.weight'])
-    #         self.block6.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.1.bn2.bias'])
-    #         self.block6.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.1.bn2.running_var'])
-    #         self.block6.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.1.bn2.running_mean'])
-    #
-    #     for i in range(self.block7.block1.numOfOps()):
-    #         self.block7.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.2.conv1.weight'])
-    #         self.block7.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.2.bn1.weight'])
-    #         self.block7.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.2.bn1.bias'])
-    #         self.block7.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.2.bn1.running_var'])
-    #         self.block7.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.2.bn1.running_mean'])
-    #
-    #     for i in range(self.block7.block2.numOfOps()):
-    #         self.block7.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer2.2.conv2.weight'])
-    #         self.block7.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.2.bn2.weight'])
-    #         self.block7.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.2.bn2.bias'])
-    #         self.block7.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer2.2.bn2.running_var'])
-    #         self.block7.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer2.2.bn2.running_mean'])
-    #
-    #     for i in range(self.block8.block1.numOfOps()):
-    #         self.block8.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.conv1.weight'])
-    #         self.block8.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.0.bn1.weight'])
-    #         self.block8.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.0.bn1.bias'])
-    #         self.block8.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.bn1.running_var'])
-    #         self.block8.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.bn1.running_mean'])
-    #
-    #     for i in range(self.block8.block2.numOfOps()):
-    #         self.block8.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.conv2.weight'])
-    #         self.block8.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.0.bn2.weight'])
-    #         self.block8.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.0.bn2.bias'])
-    #         self.block8.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.bn2.running_var'])
-    #         self.block8.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.bn2.running_mean'])
-    #
-    #     for i in range(self.block8.downsample.numOfOps()):
-    #         self.block8.downsample.ops[i]._modules['op'][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.downsample.0.weight'])
-    #         self.block8.downsample.ops[i]._modules['op'][1].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.downsample.1.weight'])
-    #         self.block8.downsample.ops[i]._modules['op'][1].bias.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.downsample.1.bias'])
-    #         self.block8.downsample.ops[i]._modules['op'][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.downsample.1.running_var'])
-    #         self.block8.downsample.ops[i]._modules['op'][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.0.downsample.1.running_mean'])
-    #
-    #     for i in range(self.block9.block1.numOfOps()):
-    #         self.block9.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.1.conv1.weight'])
-    #         self.block9.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.1.bn1.weight'])
-    #         self.block9.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.1.bn1.bias'])
-    #         self.block9.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.1.bn1.running_var'])
-    #         self.block9.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.1.bn1.running_mean'])
-    #
-    #     for i in range(self.block9.block2.numOfOps()):
-    #         self.block9.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.1.conv2.weight'])
-    #         self.block9.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.1.bn2.weight'])
-    #         self.block9.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.1.bn2.bias'])
-    #         self.block9.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.1.bn2.running_var'])
-    #         self.block9.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.1.bn2.running_mean'])
-    #
-    #     for i in range(self.block10.block1.numOfOps()):
-    #         self.block10.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.conv1.weight'])
-    #         self.block10.block1.ops[i]._modules['op'][0][1].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.bn1.weight'])
-    #         self.block10.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.2.bn1.bias'])
-    #         self.block10.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.bn1.running_var'])
-    #         self.block10.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.bn1.running_mean'])
-    #
-    #     for i in range(self.block10.block2.numOfOps()):
-    #         self.block10.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.conv2.weight'])
-    #         self.block10.block2.ops[i]._modules['op'][0][1].weight.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.bn2.weight'])
-    #         self.block10.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.2.bn2.bias'])
-    #         self.block10.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.bn2.running_var'])
-    #         self.block10.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
-    #             checkpoint['state_dict']['layer3.2.bn2.running_mean'])
-    #
-    #     for i in range(self.fc.numOfOps()):
-    #         self.fc.ops[i]._modules['op'].weight.data.copy_(checkpoint['state_dict']['fc.weight'])
-    #         self.fc.ops[i]._modules['op'].bias.data.copy_(checkpoint['state_dict']['fc.bias'])
-    #
-    #     logger.info('Loaded model from [{}]'.format(path))
+# def loadFromCheckpoint(self, path, logger, gpu):
+#     checkpoint = loadModel(path, map_location=lambda storage, loc: storage.cuda(gpu))
+#
+#     for i in range(self.block1.numOfOps()):
+#         self.block1.ops[i]._modules['op'][0][0].weight.data.copy_(checkpoint['state_dict']['conv1.weight'])
+#         self.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['bn1.weight'])
+#         self.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['bn1.bias'])
+#         self.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(checkpoint['state_dict']['bn1.running_var'])
+#         self.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(checkpoint['state_dict']['bn1.running_mean'])
+#
+#     for i in range(self.block2.block1.numOfOps()):
+#         self.block2.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer1.0.conv1.weight'])
+#         self.block2.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.0.bn1.weight'])
+#         self.block2.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.0.bn1.bias'])
+#         self.block2.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer1.0.bn1.running_var'])
+#         self.block2.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer1.0.bn1.running_mean'])
+#
+#     for i in range(self.block2.block2.numOfOps()):
+#         self.block2.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer1.0.conv2.weight'])
+#         self.block2.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.0.bn2.weight'])
+#         self.block2.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.0.bn2.bias'])
+#         self.block2.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer1.0.bn2.running_var'])
+#         self.block2.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer1.0.bn2.running_mean'])
+#
+#     for i in range(self.block3.block1.numOfOps()):
+#         self.block3.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer1.1.conv1.weight'])
+#         self.block3.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.1.bn1.weight'])
+#         self.block3.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.1.bn1.bias'])
+#         self.block3.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer1.1.bn1.running_var'])
+#         self.block3.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer1.1.bn1.running_mean'])
+#
+#     for i in range(self.block3.block2.numOfOps()):
+#         self.block3.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer1.1.conv2.weight'])
+#         self.block3.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.1.bn2.weight'])
+#         self.block3.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.1.bn2.bias'])
+#         self.block3.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer1.1.bn2.running_var'])
+#         self.block3.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer1.1.bn2.running_mean'])
+#
+#     for i in range(self.block4.block1.numOfOps()):
+#         self.block4.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer1.2.conv1.weight'])
+#         self.block4.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.2.bn1.weight'])
+#         self.block4.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.2.bn1.bias'])
+#         self.block4.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer1.2.bn1.running_var'])
+#         self.block4.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer1.2.bn1.running_mean'])
+#
+#     for i in range(self.block4.block2.numOfOps()):
+#         self.block4.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer1.2.conv2.weight'])
+#         self.block4.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer1.2.bn2.weight'])
+#         self.block4.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer1.2.bn2.bias'])
+#         self.block4.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer1.2.bn2.running_var'])
+#         self.block4.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer1.2.bn2.running_mean'])
+#
+#     for i in range(self.block5.block1.numOfOps()):
+#         self.block5.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.0.conv1.weight'])
+#         self.block5.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.0.bn1.weight'])
+#         self.block5.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.0.bn1.bias'])
+#         self.block5.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.0.bn1.running_var'])
+#         self.block5.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.0.bn1.running_mean'])
+#
+#     for i in range(self.block5.block2.numOfOps()):
+#         self.block5.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.0.conv2.weight'])
+#         self.block5.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.0.bn2.weight'])
+#         self.block5.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.0.bn2.bias'])
+#         self.block5.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.0.bn2.running_var'])
+#         self.block5.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.0.bn2.running_mean'])
+#
+#     for i in range(self.block5.downsample.numOfOps()):
+#         self.block5.downsample.ops[i]._modules['op'][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.0.downsample.0.weight'])
+#         self.block5.downsample.ops[i]._modules['op'][1].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.0.downsample.1.weight'])
+#         self.block5.downsample.ops[i]._modules['op'][1].bias.data.copy_(
+#             checkpoint['state_dict']['layer2.0.downsample.1.bias'])
+#         self.block5.downsample.ops[i]._modules['op'][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.0.downsample.1.running_var'])
+#         self.block5.downsample.ops[i]._modules['op'][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.0.downsample.1.running_mean'])
+#
+#     for i in range(self.block6.block1.numOfOps()):
+#         self.block6.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.1.conv1.weight'])
+#         self.block6.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.1.bn1.weight'])
+#         self.block6.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.1.bn1.bias'])
+#         self.block6.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.1.bn1.running_var'])
+#         self.block6.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.1.bn1.running_mean'])
+#
+#     for i in range(self.block6.block2.numOfOps()):
+#         self.block6.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.1.conv2.weight'])
+#         self.block6.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.1.bn2.weight'])
+#         self.block6.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.1.bn2.bias'])
+#         self.block6.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.1.bn2.running_var'])
+#         self.block6.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.1.bn2.running_mean'])
+#
+#     for i in range(self.block7.block1.numOfOps()):
+#         self.block7.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.2.conv1.weight'])
+#         self.block7.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.2.bn1.weight'])
+#         self.block7.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.2.bn1.bias'])
+#         self.block7.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.2.bn1.running_var'])
+#         self.block7.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.2.bn1.running_mean'])
+#
+#     for i in range(self.block7.block2.numOfOps()):
+#         self.block7.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer2.2.conv2.weight'])
+#         self.block7.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer2.2.bn2.weight'])
+#         self.block7.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer2.2.bn2.bias'])
+#         self.block7.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer2.2.bn2.running_var'])
+#         self.block7.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer2.2.bn2.running_mean'])
+#
+#     for i in range(self.block8.block1.numOfOps()):
+#         self.block8.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.0.conv1.weight'])
+#         self.block8.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.0.bn1.weight'])
+#         self.block8.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.0.bn1.bias'])
+#         self.block8.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.0.bn1.running_var'])
+#         self.block8.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.0.bn1.running_mean'])
+#
+#     for i in range(self.block8.block2.numOfOps()):
+#         self.block8.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.0.conv2.weight'])
+#         self.block8.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.0.bn2.weight'])
+#         self.block8.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.0.bn2.bias'])
+#         self.block8.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.0.bn2.running_var'])
+#         self.block8.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.0.bn2.running_mean'])
+#
+#     for i in range(self.block8.downsample.numOfOps()):
+#         self.block8.downsample.ops[i]._modules['op'][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.0.downsample.0.weight'])
+#         self.block8.downsample.ops[i]._modules['op'][1].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.0.downsample.1.weight'])
+#         self.block8.downsample.ops[i]._modules['op'][1].bias.data.copy_(
+#             checkpoint['state_dict']['layer3.0.downsample.1.bias'])
+#         self.block8.downsample.ops[i]._modules['op'][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.0.downsample.1.running_var'])
+#         self.block8.downsample.ops[i]._modules['op'][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.0.downsample.1.running_mean'])
+#
+#     for i in range(self.block9.block1.numOfOps()):
+#         self.block9.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.1.conv1.weight'])
+#         self.block9.block1.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.1.bn1.weight'])
+#         self.block9.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.1.bn1.bias'])
+#         self.block9.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.1.bn1.running_var'])
+#         self.block9.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.1.bn1.running_mean'])
+#
+#     for i in range(self.block9.block2.numOfOps()):
+#         self.block9.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.1.conv2.weight'])
+#         self.block9.block2.ops[i]._modules['op'][0][1].weight.data.copy_(checkpoint['state_dict']['layer3.1.bn2.weight'])
+#         self.block9.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.1.bn2.bias'])
+#         self.block9.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.1.bn2.running_var'])
+#         self.block9.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.1.bn2.running_mean'])
+#
+#     for i in range(self.block10.block1.numOfOps()):
+#         self.block10.block1.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.2.conv1.weight'])
+#         self.block10.block1.ops[i]._modules['op'][0][1].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.2.bn1.weight'])
+#         self.block10.block1.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.2.bn1.bias'])
+#         self.block10.block1.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.2.bn1.running_var'])
+#         self.block10.block1.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.2.bn1.running_mean'])
+#
+#     for i in range(self.block10.block2.numOfOps()):
+#         self.block10.block2.ops[i]._modules['op'][0][0].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.2.conv2.weight'])
+#         self.block10.block2.ops[i]._modules['op'][0][1].weight.data.copy_(
+#             checkpoint['state_dict']['layer3.2.bn2.weight'])
+#         self.block10.block2.ops[i]._modules['op'][0][1].bias.data.copy_(checkpoint['state_dict']['layer3.2.bn2.bias'])
+#         self.block10.block2.ops[i]._modules['op'][0][1].running_var.data.copy_(
+#             checkpoint['state_dict']['layer3.2.bn2.running_var'])
+#         self.block10.block2.ops[i]._modules['op'][0][1].running_mean.data.copy_(
+#             checkpoint['state_dict']['layer3.2.bn2.running_mean'])
+#
+#     for i in range(self.fc.numOfOps()):
+#         self.fc.ops[i]._modules['op'].weight.data.copy_(checkpoint['state_dict']['fc.weight'])
+#         self.fc.ops[i]._modules['op'].bias.data.copy_(checkpoint['state_dict']['fc.bias'])
+#
+#     logger.info('Loaded model from [{}]'.format(path))
