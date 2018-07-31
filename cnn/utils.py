@@ -181,8 +181,8 @@ def logDominantQuantizedOp(model, k, logger):
     attributes = ['bitwidth', 'act_bitwidth']
     for i, layerTop in enumerate(top):
         message = 'Layer:[{}]  '.format(i)
-        for w, alpha, layer in layerTop:
-            message += 'w:[{:.3f}]  alpha:[{:.3f}]  '.format(w, alpha)
+        for idx, w, alpha, layer in layerTop:
+            message += 'Idx:[{}]  w:[{:.3f}]  alpha:[{:.3f}]  '.format(idx, w, alpha)
             for attr in attributes:
                 v = getattr(layer, attr, None)
                 if v:

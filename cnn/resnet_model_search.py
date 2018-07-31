@@ -146,7 +146,7 @@ class ResNet(Module):
             wSorted = wSorted[:k]
             wIndices = wIndices[:k]
             # add to top
-            top.append([(w.item(), layer.alphas[i], layer.ops[i]) for w, i in zip(wSorted, wIndices)])
+            top.append([(i, w.item(), layer.alphas[i], layer.ops[i]) for w, i in zip(wSorted, wIndices)])
 
         return top
 
