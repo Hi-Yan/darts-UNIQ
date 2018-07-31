@@ -41,7 +41,7 @@ class BasicBlock(Module):
             if in_planes != out_planes else None
 
     def forward(self, x):
-        residual = x if self.downsample is None else self.downsample(x)
+        residual = self.downsample(x) if self.downsample else x
 
         out = self.block1(x)
         out = self.block2(out, residual)
