@@ -7,8 +7,6 @@ from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
 from abc import abstractmethod
 
-bitwidths = [3]
-
 
 def save_quant_state(self, _):
     assert (self.noise is False)
@@ -80,9 +78,8 @@ class MixedOp(Module):
 
 
 class MixedLinear(MixedOp):
-    def __init__(self, nBitsMin, nBitsMax, in_features, out_features):
-        self.nBitsMin = nBitsMin
-        self.nBitsMax = nBitsMax
+    def __init__(self, bitwidths, in_features, out_features):
+        self.bitwidths = bitwidths
         self.in_features = in_features
         self.out_features = out_features
 
@@ -90,8 +87,7 @@ class MixedLinear(MixedOp):
 
     def initOps(self):
         ops = ModuleList()
-        # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        for bitwidth in bitwidths:
+        for bitwidth in self.bitwidths:
             op = Linear(self.in_features, self.out_features)
             ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
             # ops.append(op)
@@ -100,9 +96,8 @@ class MixedLinear(MixedOp):
 
 
 class MixedConv(MixedOp):
-    def __init__(self, nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride):
-        self.nBitsMin = nBitsMin
-        self.nBitsMax = nBitsMax
+    def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride):
+        self.bitwidths = bitwidths
         self.in_planes = in_planes
         self.out_planes = out_planes
         self.kernel_size = kernel_size
@@ -112,8 +107,7 @@ class MixedConv(MixedOp):
 
     def initOps(self):
         ops = ModuleList()
-        # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        for bitwidth in bitwidths:
+        for bitwidth in self.bitwidths:
             op = Sequential(
                 Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
                        stride=self.stride, padding=1, bias=False),
@@ -126,9 +120,8 @@ class MixedConv(MixedOp):
 
 
 class MixedConvWithReLU(MixedOp):
-    def __init__(self, nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride, useResidual=False):
-        self.nBitsMin = nBitsMin
-        self.nBitsMax = nBitsMax
+    def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride, useResidual=False):
+        self.bitwidths = bitwidths
         self.in_planes = in_planes
         self.out_planes = out_planes
         self.kernel_size = kernel_size
@@ -142,21 +135,20 @@ class MixedConvWithReLU(MixedOp):
 
     def initOps(self):
         ops = ModuleList()
-        # for bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        #     for act_bitwidth in range(self.nBitsMin, self.nBitsMax + 1):
-        for bitwidth in bitwidths:
-            act_bitwidth = bitwidth
-            op = Sequential(
-                Sequential(
-                    Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
-                           stride=self.stride, padding=1, bias=False),
-                    BatchNorm2d(self.out_planes)
-                ),
-                ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
-                # ReLU(inplace=True)
-            )
-            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
-            # ops.append(op)
+        for bitwidth in self.bitwidths:
+            for act_bitwidth in self.bitwidths:
+                # act_bitwidth = bitwidth
+                op = Sequential(
+                    Sequential(
+                        Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
+                               stride=self.stride, padding=1, bias=False),
+                        BatchNorm2d(self.out_planes)
+                    ),
+                    ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
+                    # ReLU(inplace=True)
+                )
+                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
+                # ops.append(op)
 
         return ops
 
@@ -178,15 +170,15 @@ class MixedConvWithReLU(MixedOp):
 
 
 class BasicBlock(Module):
-    def __init__(self, nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride):
+    def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride):
         super(BasicBlock, self).__init__()
 
         stride1 = stride if in_planes == out_planes else (stride + 1)
 
-        self.block1 = MixedConvWithReLU(nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride1, useResidual=False)
-        self.block2 = MixedConvWithReLU(nBitsMin, nBitsMax, out_planes, out_planes, kernel_size, stride, useResidual=True)
+        self.block1 = MixedConvWithReLU(bitwidths, in_planes, out_planes, kernel_size, stride1, useResidual=False)
+        self.block2 = MixedConvWithReLU(bitwidths, out_planes, out_planes, kernel_size, stride, useResidual=True)
 
-        self.downsample = MixedConv(nBitsMin, nBitsMax, in_planes, out_planes, kernel_size, stride1) \
+        self.downsample = MixedConv(bitwidths, in_planes, out_planes, kernel_size, stride1) \
             if in_planes != out_planes else None
 
     def forward(self, x):
@@ -201,25 +193,25 @@ class BasicBlock(Module):
 class ResNet(Module):
     nClasses = 10  # cifar-10
 
-    def __init__(self, criterion, nBitsMin, nBitsMax):
+    def __init__(self, criterion, bitwidths):
         super(ResNet, self).__init__()
 
         # init MixedConvWithReLU layers list
         self.layersList = []
 
-        self.block1 = MixedConvWithReLU(nBitsMin, nBitsMax, 3, 16, 3, 1)
+        self.block1 = MixedConvWithReLU(bitwidths, 3, 16, 3, 1)
         self.layersList.append(self.block1)
 
         layers = [
-            BasicBlock(nBitsMin, nBitsMax, 16, 16, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 16, 16, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 16, 16, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 16, 32, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 32, 32, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 32, 32, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 32, 64, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 64, 64, 3, 1),
-            BasicBlock(nBitsMin, nBitsMax, 64, 64, 3, 1)
+            BasicBlock(bitwidths, 16, 16, 3, 1),
+            BasicBlock(bitwidths, 16, 16, 3, 1),
+            BasicBlock(bitwidths, 16, 16, 3, 1),
+            BasicBlock(bitwidths, 16, 32, 3, 1),
+            BasicBlock(bitwidths, 32, 32, 3, 1),
+            BasicBlock(bitwidths, 32, 32, 3, 1),
+            BasicBlock(bitwidths, 32, 64, 3, 1),
+            BasicBlock(bitwidths, 64, 64, 3, 1),
+            BasicBlock(bitwidths, 64, 64, 3, 1)
         ]
 
         i = 2
@@ -228,7 +220,7 @@ class ResNet(Module):
             i += 1
 
         self.avgpool = AvgPool2d(8)
-        self.fc = MixedLinear(nBitsMin, nBitsMax, 64, self.nClasses)
+        self.fc = MixedLinear(bitwidths, 64, self.nClasses)
 
         # build mixture layers list
         self.layersList = [m for m in self.modules() if isinstance(m, MixedOp)]
