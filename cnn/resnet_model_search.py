@@ -3,7 +3,7 @@ from torch.nn import Module, Conv2d, AvgPool2d
 import torch.nn.functional as F
 from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
-from cnn.MixedOp import MixedConv, MixedConvWithReLU, MixedLinear, MixedOp
+from cnn.MixedOp import MixedConv, MixedConvWithReLU, MixedLinear, MixedOp, QuantizedOp
 
 
 def save_quant_state(self, _):
@@ -133,6 +133,19 @@ class ResNet(Module):
 
     def getLearnableParams(self):
         return self.learnable_params
+
+    def alphas_state_dict(self):
+        res = {}
+        for moduleName, module in self.named_modules():
+            if isinstance(module, MixedOp):
+                for opName, op in module.ops.named_modules():
+                    if isinstance(op, QuantizedOp):
+                        key = moduleName + '.ops.' + opName
+                        idx = int(opName)
+                        assert (module.ops[idx] == op)
+                        res[key] = module.alphas[idx]
+
+        return res
 
     # return top k operations per layer
     def topOps(self, k):
