@@ -1,7 +1,7 @@
 from UNIQ.uniq import UNIQNet
 from UNIQ.actquant import ActQuant
 from torch import tensor, ones
-from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, Linear
+from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, Linear, ReLU
 import torch.nn.functional as F
 from math import floor
 from abc import abstractmethod
@@ -66,8 +66,8 @@ class MixedLinear(MixedOp):
         ops = ModuleList()
         for bitwidth in self.bitwidths:
             op = Linear(self.in_features, self.out_features)
-            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
-            # ops.append(op)
+            op = QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[])
+            ops.append(op)
 
         return ops
 
@@ -92,8 +92,8 @@ class MixedConv(MixedOp):
                            stride=self.stride, padding=floor(ker_sz / 2), bias=False),
                     BatchNorm2d(self.out_planes)
                 )
-                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
-                # ops.append(op)
+                op = QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[])
+                ops.append(op)
 
         return ops
 
@@ -128,9 +128,8 @@ class MixedConvWithReLU(MixedOp):
                         ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
                         # ReLU(inplace=True)
                     )
-                    ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth],
-                                           useResidual=self.useResidual))
-                    # ops.append(op)
+                    op = QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual)
+                    ops.append(op)
 
         return ops
 
@@ -138,7 +137,7 @@ class MixedConvWithReLU(MixedOp):
         weights = F.softmax(self.alphas, dim=-1)
         return sum(w * op(x, residual) for w, op in zip(weights, self.ops))
 
-    # for standard op, without QuantizedOp wrapping
+    # # for standard op, without QuantizedOp wrapping
     # def residualForward(self, x, residual):
     #     weights = F.softmax(self.alphas, dim=-1)
     #     opsForward = []
