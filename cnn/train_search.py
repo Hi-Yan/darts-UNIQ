@@ -53,11 +53,12 @@ def parseArgs():
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
     parser.add_argument('--checkpoint', type=str,
-                        # default=None)
-                        default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
+                        default=None)
+                        # default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     parser.add_argument('--bitwidth', type=str, default=None, help='list of bitwidth values, e.g. 1,4,16')
+    parser.add_argument('--kernel', type=str, default='3', help='list of conv kernel sizes, e.g. 1,3,5')
     args = parser.parse_args()
 
     # convert epochs to list
@@ -68,6 +69,9 @@ def parseArgs():
         args.bitwidth = [int(i) for i in args.bitwidth.split(',')]
     else:
         args.bitwidth = range(args.nBitsMin, args.nBitsMax + 1)
+
+    # convert kernel sizes to list
+    args.kernel = [int(i) for i in args.kernel.split(',')]
 
     # update GPUs list
     if type(args.gpu) is str:
@@ -179,7 +183,7 @@ cuda_manual_seed(args.seed)
 criterion = CrossEntropyLoss()
 criterion = criterion.cuda()
 # criterion = criterion.to(args.device)
-model = ResNet(criterion, args.bitwidth)
+model = ResNet(criterion, args.bitwidth, args.kernel)
 # model = DataParallel(model, args.gpu)
 model = model.cuda()
 # model = model.to(args.device)
