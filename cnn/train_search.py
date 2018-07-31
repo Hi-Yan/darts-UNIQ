@@ -13,13 +13,12 @@ from torch.cuda import is_available, set_device
 from torch.cuda import manual_seed as cuda_manual_seed
 from torch import manual_seed as torch_manual_seed
 from torch import no_grad
-from torch.optim import SGD, Adam
+from torch.optim import SGD
 from torch.autograd.variable import Variable
 
 from cnn.utils import create_exp_dir, count_parameters_in_MB, accuracy, AvgrageMeter, save
 from cnn.utils import initLogger, printModelToFile, initTrainLogger, logDominantQuantizedOp, save_checkpoint
 from cnn.utils import load_data, load_checkpoint
-from cnn.model_search import Network
 from cnn.resnet_model_search import ResNet
 from cnn.architect import Architect
 
@@ -28,7 +27,7 @@ def parseArgs():
     parser = argparse.ArgumentParser("cifar")
     parser.add_argument('--data', type=str, required=True, help='location of the data corpus')
     parser.add_argument('--batch_size', type=int, default=256, help='batch size')
-    parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
+    parser.add_argument('--learning_rate', type=float, default=0.01, help='init learning rate')
     parser.add_argument('--learning_rate_min', type=float, default=1E-8, help='min learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay')
@@ -58,10 +57,17 @@ def parseArgs():
                         default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
+    parser.add_argument('--bitwidth', type=str, default=None, help='list of bitwidth values, e.g. 1,4,16')
     args = parser.parse_args()
 
     # convert epochs to list
     args.epochs = [int(i) for i in args.epochs.split(',')]
+
+    # convert bitwidth to list or range
+    if args.bitwidth:
+        args.bitwidth = [int(i) for i in args.bitwidth.split(',')]
+    else:
+        args.bitwidth = range(args.nBitsMin, args.nBitsMax + 1)
 
     # update GPUs list
     if type(args.gpu) is str:
@@ -173,8 +179,7 @@ cuda_manual_seed(args.seed)
 criterion = CrossEntropyLoss()
 criterion = criterion.cuda()
 # criterion = criterion.to(args.device)
-# model = Network(args.init_channels, CIFAR_CLASSES, args.layers, criterion)
-model = ResNet(criterion, args.nBitsMin, args.nBitsMax)
+model = ResNet(criterion, args.bitwidth)
 # model = DataParallel(model, args.gpu)
 model = model.cuda()
 # model = model.to(args.device)
