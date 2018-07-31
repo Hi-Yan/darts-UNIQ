@@ -1,7 +1,9 @@
 from UNIQ.uniq import UNIQNet
+from UNIQ.actquant import ActQuant
 from torch import tensor, ones
 from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, Linear
 import torch.nn.functional as F
+from math import floor
 from abc import abstractmethod
 
 
@@ -72,6 +74,7 @@ class MixedLinear(MixedOp):
 
 class MixedConv(MixedOp):
     def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride):
+        assert (isinstance(kernel_size, list))
         self.bitwidths = bitwidths
         self.in_planes = in_planes
         self.out_planes = out_planes
@@ -83,19 +86,21 @@ class MixedConv(MixedOp):
     def initOps(self):
         ops = ModuleList()
         for bitwidth in self.bitwidths:
-            op = Sequential(
-                Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
-                       stride=self.stride, padding=1, bias=False),
-                BatchNorm2d(self.out_planes)
-            )
-            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
-            # ops.append(op)
+            for ker_sz in self.kernel_size:
+                op = Sequential(
+                    Conv2d(self.in_planes, self.out_planes, kernel_size=ker_sz,
+                           stride=self.stride, padding=floor(ker_sz / 2), bias=False),
+                    BatchNorm2d(self.out_planes)
+                )
+                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
+                # ops.append(op)
 
         return ops
 
 
 class MixedConvWithReLU(MixedOp):
     def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride, useResidual=False):
+        assert (isinstance(kernel_size, list))
         self.bitwidths = bitwidths
         self.in_planes = in_planes
         self.out_planes = out_planes
@@ -112,18 +117,20 @@ class MixedConvWithReLU(MixedOp):
         ops = ModuleList()
         for bitwidth in self.bitwidths:
             for act_bitwidth in self.bitwidths:
-                # act_bitwidth = bitwidth
-                op = Sequential(
-                    Sequential(
-                        Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
-                               stride=self.stride, padding=1, bias=False),
-                        BatchNorm2d(self.out_planes)
-                    ),
-                    ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
-                    # ReLU(inplace=True)
-                )
-                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
-                # ops.append(op)
+                for ker_sz in self.kernel_size:
+                    # act_bitwidth = bitwidth
+                    op = Sequential(
+                        Sequential(
+                            Conv2d(self.in_planes, self.out_planes, kernel_size=ker_sz,
+                                   stride=self.stride, padding=floor(ker_sz / 2), bias=False),
+                            BatchNorm2d(self.out_planes)
+                        ),
+                        ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
+                        # ReLU(inplace=True)
+                    )
+                    ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth],
+                                           useResidual=self.useResidual))
+                    # ops.append(op)
 
         return ops
 
