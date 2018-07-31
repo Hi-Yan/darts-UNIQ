@@ -58,19 +58,19 @@ class ResNet(Module):
         # init MixedConvWithReLU layers list
         self.layersList = []
 
-        self.block1 = MixedConvWithReLU(bitwidths, 3, 16, 3, 1)
+        self.block1 = MixedConvWithReLU(bitwidths, 3, 16, [3], 1)
         self.layersList.append(self.block1)
 
         layers = [
-            BasicBlock(bitwidths, 16, 16, 3, 1),
-            BasicBlock(bitwidths, 16, 16, 3, 1),
-            BasicBlock(bitwidths, 16, 16, 3, 1),
-            BasicBlock(bitwidths, 16, 32, 3, 1),
-            BasicBlock(bitwidths, 32, 32, 3, 1),
-            BasicBlock(bitwidths, 32, 32, 3, 1),
-            BasicBlock(bitwidths, 32, 64, 3, 1),
-            BasicBlock(bitwidths, 64, 64, 3, 1),
-            BasicBlock(bitwidths, 64, 64, 3, 1)
+            BasicBlock(bitwidths, 16, 16, [3], 1),
+            BasicBlock(bitwidths, 16, 16, [3], 1),
+            BasicBlock(bitwidths, 16, 16, [3], 1),
+            BasicBlock(bitwidths, 16, 32, [3], 1),
+            BasicBlock(bitwidths, 32, 32, [3], 1),
+            BasicBlock(bitwidths, 32, 32, [3], 1),
+            BasicBlock(bitwidths, 32, 64, [3], 1),
+            BasicBlock(bitwidths, 64, 64, [3], 1),
+            BasicBlock(bitwidths, 64, 64, [3], 1)
         ]
 
         i = 2
