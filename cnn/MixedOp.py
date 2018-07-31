@@ -118,7 +118,6 @@ class MixedConvWithReLU(MixedOp):
         for bitwidth in self.bitwidths:
             for act_bitwidth in self.bitwidths:
                 for ker_sz in self.kernel_size:
-                    # act_bitwidth = bitwidth
                     op = Sequential(
                         Sequential(
                             Conv2d(self.in_planes, self.out_planes, kernel_size=ker_sz,
