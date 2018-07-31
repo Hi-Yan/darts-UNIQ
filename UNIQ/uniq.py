@@ -128,6 +128,7 @@ class UNIQNet(nn.Module):
 
         # collect layers by steps
         self.layers_steps = self.get_layers_steps(self.layers_list)
+        # TODO: merge downsample with its conv to single step???
 
         # remove edge layers if we don't quantize edges
         if not self.quant_edges:
