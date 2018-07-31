@@ -1,11 +1,9 @@
-from torch import tensor, randn, ones
 from torch import load as loadModel
-from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, AvgPool2d, Linear, ReLU
+from torch.nn import Module, Conv2d, AvgPool2d
 import torch.nn.functional as F
-from UNIQ.uniq import UNIQNet
 from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
-from abc import abstractmethod
+from cnn.MixedOp import MixedConv, MixedConvWithReLU, MixedLinear
 
 
 def save_quant_state(self, _):
@@ -28,145 +26,6 @@ def restore_quant_state(self, _, __):
         assert (len(layers_steps) == 1)
 
         restore_weights(layers_steps[0], self.full_parameters)  # Restore the quantized layers
-
-
-class QuantizedOp(UNIQNet):
-    def __init__(self, op, bitwidth=[], act_bitwidth=[], useResidual=False):
-        # noise=False because we want to noise only specific layer in the entire (ResNet) model
-        super(QuantizedOp, self).__init__(quant=True, noise=False, quant_edges=True,
-                                          act_quant=True, act_noise=False,
-                                          step_setup=[1, 1],
-                                          bitwidth=bitwidth, act_bitwidth=act_bitwidth)
-
-        self.forward = self.residualForward if useResidual else self.standardForward
-
-        self.op = op.cuda()
-        self.prepare_uniq()
-
-    def standardForward(self, x):
-        return self.op(x)
-
-    def residualForward(self, x, residual):
-        out = self.op[0](x)
-        out += residual
-        out = self.op[1](out)
-
-        return out
-
-
-class MixedOp(Module):
-    def __init__(self):
-        super(MixedOp, self).__init__()
-
-        # init operations mixture
-        self.ops = self.initOps()
-        # init operations alphas (weights)
-        # self.alphas = tensor(randn(self.numOfOps()).cuda(), requires_grad=True)
-        value = 1.0 / self.numOfOps()
-        self.alphas = tensor((ones(self.numOfOps()) * value).cuda(), requires_grad=True)
-
-    @abstractmethod
-    def initOps(self):
-        raise NotImplementedError('subclasses must override initOps()!')
-
-    def forward(self, x):
-        weights = F.softmax(self.alphas, dim=-1)
-        return sum(w * op(x) for w, op in zip(weights, self.ops))
-
-    def numOfOps(self):
-        return len(self.ops)
-
-
-class MixedLinear(MixedOp):
-    def __init__(self, bitwidths, in_features, out_features):
-        self.bitwidths = bitwidths
-        self.in_features = in_features
-        self.out_features = out_features
-
-        super(MixedLinear, self).__init__()
-
-    def initOps(self):
-        ops = ModuleList()
-        for bitwidth in self.bitwidths:
-            op = Linear(self.in_features, self.out_features)
-            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
-            # ops.append(op)
-
-        return ops
-
-
-class MixedConv(MixedOp):
-    def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride):
-        self.bitwidths = bitwidths
-        self.in_planes = in_planes
-        self.out_planes = out_planes
-        self.kernel_size = kernel_size
-        self.stride = stride
-
-        super(MixedConv, self).__init__()
-
-    def initOps(self):
-        ops = ModuleList()
-        for bitwidth in self.bitwidths:
-            op = Sequential(
-                Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
-                       stride=self.stride, padding=1, bias=False),
-                BatchNorm2d(self.out_planes)
-            )
-            ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[]))
-            # ops.append(op)
-
-        return ops
-
-
-class MixedConvWithReLU(MixedOp):
-    def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride, useResidual=False):
-        self.bitwidths = bitwidths
-        self.in_planes = in_planes
-        self.out_planes = out_planes
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.useResidual = useResidual
-
-        super(MixedConvWithReLU, self).__init__()
-
-        if useResidual:
-            self.forward = self.residualForward
-
-    def initOps(self):
-        ops = ModuleList()
-        for bitwidth in self.bitwidths:
-            for act_bitwidth in self.bitwidths:
-                # act_bitwidth = bitwidth
-                op = Sequential(
-                    Sequential(
-                        Conv2d(self.in_planes, self.out_planes, kernel_size=self.kernel_size,
-                               stride=self.stride, padding=1, bias=False),
-                        BatchNorm2d(self.out_planes)
-                    ),
-                    ActQuant(quant=True, noise=False, bitwidth=act_bitwidth)
-                    # ReLU(inplace=True)
-                )
-                ops.append(QuantizedOp(op, bitwidth=[bitwidth], act_bitwidth=[act_bitwidth], useResidual=self.useResidual))
-                # ops.append(op)
-
-        return ops
-
-    def residualForward(self, x, residual):
-        weights = F.softmax(self.alphas, dim=-1)
-        return sum(w * op(x, residual) for w, op in zip(weights, self.ops))
-
-    # for standard op, without QuantizedOp wrapping
-    # def residualForward(self, x, residual):
-    #     weights = F.softmax(self.alphas, dim=-1)
-    #     opsForward = []
-    #     for op in self.ops:
-    #         out = op[0](x)
-    #         out += residual
-    #         out = op[1](out)
-    #         opsForward.append(out)
-    #
-    #     return sum(w * p for w, p in zip(weights, opsForward))
 
 
 class BasicBlock(Module):
