@@ -133,7 +133,8 @@ def save_checkpoint(path, model, epoch, best_prec1, is_best=False):
 def load_pre_trained(path, model, logger, gpu):
     if path is not None:
         if os.path.exists(path):
-            model.loadPreTrainedModel(path, logger, gpu)
+            # model.loadPreTrainedModel(path, logger, gpu)
+            model.loadUNIQPre_trained(path, logger, gpu)
         else:
             logger.info('Failed to load pre-trained from [{}], path does not exists'.format(path))
 
