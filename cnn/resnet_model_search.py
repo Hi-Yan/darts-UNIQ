@@ -230,7 +230,7 @@ class ResNet(Module):
         map['fc'] = 'fc.ops.0.op'
 
         token = '.ops.'
-        for key, item in chckpntDict.items():
+        for key in chckpntDict.keys():
             prefix = key[:key.rindex('.')]
             suffix = key[key.rindex('.'):]
             newKey = map[prefix]
