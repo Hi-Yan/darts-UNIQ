@@ -125,7 +125,7 @@ def save_state(state, is_best, path='.', filename='model'):
 
 
 def save_checkpoint(path, model, epoch, best_prec1, is_best=False):
-    state = dict(epoch=epoch + 1, state_dict=model.state_dict(), alphas=model.arch_parameters(),
+    state = dict(epoch=epoch + 1, state_dict=model.state_dict(), alphas=model.alphas_state(),
                  nLayersQuantCompleted=model.nLayersQuantCompleted, best_prec1=best_prec1)
     save_state(state, is_best, path=path)
 

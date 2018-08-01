@@ -135,16 +135,12 @@ class ResNet(Module):
     def getLearnableParams(self):
         return self.learnable_params
 
-    def alphas_state_dict(self):
-        res = {}
-        for moduleName, module in self.named_modules():
-            if isinstance(module, MixedOp):
-                for opName, op in module.ops.named_modules():
-                    if isinstance(op, QuantizedOp):
-                        key = moduleName + '.ops.' + opName
-                        idx = int(opName)
-                        assert (module.ops[idx] == op)
-                        res[key] = module.alphas[idx]
+    # create list of lists of alpha with its corresponding operation
+    def alphas_state(self):
+        res = []
+        for layer in self.layersList:
+            layerAlphas = [(a, op) for a, op in zip(layer.alphas, layer.ops)]
+            res.append(layerAlphas)
 
         return res
 
