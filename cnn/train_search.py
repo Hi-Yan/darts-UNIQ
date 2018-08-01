@@ -18,7 +18,7 @@ from torch.autograd.variable import Variable
 
 from cnn.utils import create_exp_dir, count_parameters_in_MB, accuracy, AvgrageMeter, save
 from cnn.utils import initLogger, printModelToFile, initTrainLogger, logDominantQuantizedOp, save_checkpoint
-from cnn.utils import load_data, load_checkpoint
+from cnn.utils import load_data, load_pre_trained
 from cnn.resnet_model_search import ResNet
 from cnn.architect import Architect
 
@@ -49,12 +49,12 @@ def parseArgs():
     parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
     parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
     parser.add_argument('--propagate', action='store_true', default=False, help='print to stdout')
-    parser.add_argument('--arch_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
+    parser.add_argument('--arch_learning_rate', type=float, default=0.01, help='learning rate for arch encoding')
     parser.add_argument('--arch_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
 
-    parser.add_argument('--checkpoint', type=str,
+    parser.add_argument('--pre_trained', type=str,
                         default=None)
-                        # default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18/model_opt.pth.tar')
+    # default='/home/yochaiz/darts/cnn/pre_trained_models/resnet_18_3_ops/model_opt.pth.tar')
     parser.add_argument('--nBitsMin', type=int, default=1, choices=range(1, 32 + 1), help='min number of bits')
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     parser.add_argument('--bitwidth', type=str, default=None, help='list of bitwidth values, e.g. 1,4,16')
@@ -70,8 +70,9 @@ def parseArgs():
     else:
         args.bitwidth = range(args.nBitsMin, args.nBitsMax + 1)
 
-    # convert kernel sizes to list
+    # convert kernel sizes to list, sorted ascending
     args.kernel = [int(i) for i in args.kernel.split(',')]
+    args.kernel.sort()
 
     # update GPUs list
     if type(args.gpu) is str:
@@ -187,8 +188,8 @@ model = ResNet(criterion, args.bitwidth, args.kernel)
 # model = DataParallel(model, args.gpu)
 model = model.cuda()
 # model = model.to(args.device)
-# load full-precision model
-load_checkpoint(args.checkpoint, model, logger, args.gpu[0])
+# load pre-trained full-precision model
+load_pre_trained(args.pre_trained, model, logger, args.gpu[0])
 
 # print some attributes
 printModelToFile(model, args.save)
