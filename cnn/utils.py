@@ -130,12 +130,12 @@ def save_checkpoint(path, model, epoch, best_prec1, is_best=False):
     save_state(state, is_best, path=path)
 
 
-def load_checkpoint(path, model, logger, gpu):
+def load_pre_trained(path, model, logger, gpu):
     if path is not None:
         if os.path.exists(path):
-            model.loadFromCheckpoint(path, logger, gpu)
+            model.loadPreTrainedModel(path, logger, gpu)
         else:
-            logger.info('Failed to load checkpoint [{}], path does not exists'.format(path))
+            logger.info('Failed to load pre-trained from [{}], path does not exists'.format(path))
 
 
 def setup_logging(log_file, logger_name, propagate=False):
