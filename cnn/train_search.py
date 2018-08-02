@@ -24,7 +24,7 @@ from cnn.architect import Architect
 from cnn.uniq_loss import UniqLoss
 
 
-def parseArgs(lossFuncs):
+def parseArgs(lossFuncsLambda):
     parser = argparse.ArgumentParser("cifar")
     parser.add_argument('--data', type=str, required=True, help='location of the data corpus')
     parser.add_argument('--batch_size', type=int, default=256, help='batch size')
@@ -61,14 +61,14 @@ def parseArgs(lossFuncs):
     parser.add_argument('--bitwidth', type=str, default=None, help='list of bitwidth values, e.g. 1,4,16')
     parser.add_argument('--kernel', type=str, default='3', help='list of conv kernel sizes, e.g. 1,3,5')
 
-    parser.add_argument('--loss', type=str, default='UniqLoss', choices=[key for key in lossFuncs.keys()])
+    parser.add_argument('--loss', type=str, default='UniqLoss', choices=[key for key in lossFuncsLambda.keys()])
     parser.add_argument('--lmbda', type=float, default=1.0, help='Lambda value for UniqLoss')
     parser.add_argument('--MaxBopsBits', type=int, default=3, choices=range(1, 32), help='maximum bits for uniform division')
 
     args = parser.parse_args()
 
     # manipulaye lambda value according to selected loss
-    _, lossLambda = lossFuncs[args.loss]
+    lossLambda = lossFuncsLambda[args.loss]
     args.lmbda *= lossLambda
 
     # convert epochs to list
@@ -175,9 +175,9 @@ def infer(valid_queue, args, model, criterion, logger):
     return top1.avg, objs.avg
 
 
-# loss functions can manipulate lambda value
-lossFuncs = dict(UniqLoss=(UniqLoss, 1.0), CrossEntropy=(CrossEntropyLoss, 0.0))
-args = parseArgs(lossFuncs)
+# loss functions manipulate lambda value
+lossFuncsLambda = dict(UniqLoss=1.0, CrossEntropy=0.0)
+args = parseArgs(lossFuncsLambda)
 print(args)
 logger = initLogger(args.save, args.propagate)
 CIFAR_CLASSES = 10
@@ -194,7 +194,7 @@ cudnn.enabled = True
 cuda_manual_seed(args.seed)
 
 cross_entropy = CrossEntropyLoss().cuda()
-criterion = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel)
+criterion = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel, folderName=args.save)
 criterion = criterion.cuda()
 # criterion = criterion.to(args.device)
 model = ResNet(criterion, args.bitwidth, args.kernel)
