@@ -129,7 +129,7 @@ class ResNet(Module):
 
     def _loss(self, input, target):
         logits = self(input)
-        return self._criterion(logits, target)
+        return self._criterion(logits, target, self.countBops())
 
     def arch_parameters(self):
         return self._arch_parameters
@@ -145,6 +145,16 @@ class ResNet(Module):
             res.append(layerAlphas)
 
         return res
+
+    # counts the entire model bops
+    def countBops(self):
+        totalBops = 0
+        for layer in self.layersList:
+            weights = F.softmax(layer.alphas, dim=-1)
+            for w, b in zip(weights, layer.bops):
+                totalBops += (w * b)
+
+        return totalBops
 
     # return top k operations per layer
     def topOps(self, k):
