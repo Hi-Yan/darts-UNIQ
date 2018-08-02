@@ -96,7 +96,7 @@ def parseArgs(lossFuncsLambda):
     return args
 
 
-def train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, logger):
+def train(train_queue, search_queue, args, model, architect, crit, optimizer, lr, logger):
     objs = AvgrageMeter()
     top1 = AvgrageMeter()
     top5 = AvgrageMeter()
@@ -122,7 +122,7 @@ def train(train_queue, search_queue, args, model, architect, criterion, optimize
 
         optimizer.zero_grad()
         logits = model(input)
-        loss = criterion(logits, target)
+        loss = crit(logits, target)
 
         loss.backward()
         clip_grad_norm(model.parameters(), args.grad_clip)
@@ -136,13 +136,14 @@ def train(train_queue, search_queue, args, model, architect, criterion, optimize
         endTime = time()
 
         if step % args.report_freq == 0:
-            logger.info('train [{}/{}] Loss:[{:.5f}] Accuracy:[{:.3f}] time:[{:.5f}]'
-                        .format(step, nBatches, objs.avg, top1.avg, endTime - startTime))
+            logger.info('train [{}/{}] Loss:[{:.5f}] Accuracy:[{:.3f}] BopsRatio:[{:.3f}] BopsLoss[{:.5f}] time:[{:.5f}]'
+                        .format(step, nBatches, objs.avg, top1.avg, model._criterion.bopsRatio,
+                                model._criterion.quant_loss, endTime - startTime))
 
     return top1.avg, objs.avg
 
 
-def infer(valid_queue, args, model, criterion, logger):
+def infer(valid_queue, args, model, crit, logger):
     objs = AvgrageMeter()
     top1 = AvgrageMeter()
     top5 = AvgrageMeter()
@@ -154,11 +155,11 @@ def infer(valid_queue, args, model, criterion, logger):
         for step, (input, target) in enumerate(valid_queue):
             startTime = time()
 
-            input = Variable(input, volatile=True).cuda()
-            target = Variable(target, volatile=True).cuda(async=True)
+            input = Variable(input).cuda()
+            target = Variable(target).cuda(async=True)
 
             logits = model(input)
-            loss = criterion(logits, target)
+            loss = crit(logits, target)
 
             prec1, prec5 = accuracy(logits, target, topk=(1, 5))
             n = input.size(0)
@@ -169,8 +170,10 @@ def infer(valid_queue, args, model, criterion, logger):
             endTime = time()
 
             if step % args.report_freq == 0:
-                logger.info('validation [{}/{}] Loss:[{:.5f}] Accuracy:[{:.3f}] time:[{:.5f}]'.
-                            format(step, nBatches, objs.avg, top1.avg, endTime - startTime))
+                logger.info(
+                    'validation [{}/{}] Loss:[{:.5f}] Accuracy:[{:.3f}] BopsRatio:[{:.3f}] BopsLoss[{:.5f}] time:[{:.5f}]'
+                        .format(step, nBatches, objs.avg, top1.avg, model._criterion.bopsRatio,
+                                model._criterion.quant_loss, endTime - startTime))
 
     return top1.avg, objs.avg
 
@@ -194,10 +197,10 @@ cudnn.enabled = True
 cuda_manual_seed(args.seed)
 
 cross_entropy = CrossEntropyLoss().cuda()
-criterion = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel, folderName=args.save)
-criterion = criterion.cuda()
+crit = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel, folderName=args.save)
+crit = crit.cuda()
 # criterion = criterion.to(args.device)
-model = ResNet(criterion, args.bitwidth, args.kernel)
+model = ResNet(crit, args.bitwidth, args.kernel)
 # model = DataParallel(model, args.gpu)
 model = model.cuda()
 # model = model.to(args.device)
