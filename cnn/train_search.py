@@ -190,7 +190,8 @@ cuda_manual_seed(args.seed)
 cross_entropy = CrossEntropyLoss().cuda()
 if args.loss == 'CrossEntropy':
     args.lmbda = 0
-criterion = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, batch_size=args.kernel)
+
+criterion = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel)
 criterion = criterion.cuda()
 # criterion = criterion.to(args.device)
 model = ResNet(criterion, args.bitwidth, args.kernel)
