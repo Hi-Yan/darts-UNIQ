@@ -67,7 +67,7 @@ class UniqLoss(Module):
     #     # big penalization if bops over MaxBops
     #     penalization_factor = 1
     #     if (bops_input > MaxBops):
-    #         penalization_factor = 5  # TODO - change penalization factor
+    #         penalization_factor = 5
     #     quant_loss = penalization_factor * (bops_input / MaxBops)
     #
     #     return self.search_loss(input, target) + (self.lmdba * quant_loss)
