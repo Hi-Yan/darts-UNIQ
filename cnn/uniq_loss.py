@@ -1,8 +1,6 @@
-from torch.nn import CrossEntropyLoss, Module
+from torch.nn import CrossEntropyLoss, Module, Tanh
+from torch import tensor
 from cnn.resnet_model_search import ResNet
-from numpy import linspace
-import matplotlib.pyplot as plt
-
 
 class UniqLoss(Module):
     def __init__(self, lmdba, MaxBopsBits, kernel_sizes):
@@ -14,43 +12,26 @@ class UniqLoss(Module):
         # build model for uniform distribution of bits
         uniform_model = ResNet(self.search_loss, bitwidths=[MaxBopsBits], kernel_sizes=kernel_sizes)
         self.maxBops = uniform_model.countBops()
+        self.penalization_func = Tanh()
 
     def forward(self, input, target, modelBops):
         # big penalization if bops over MaxBops
-        penalization_factor = 1
-        if (modelBops > self.maxBops):
-            penalization_factor = 5  # TODO - change penalization factor
-        quant_loss = penalization_factor * (modelBops / self.maxBops)
+        quant_loss = self._bops_loss(modelBops)
 
         return self.search_loss(input, target) + (self.lmdba * quant_loss)
 
-    def plotFunction(self, func, folderName):
-        # build data for function
-        pts = linspace(0, 1, 101).tolist()
-        y = [round(func(x), 5) for x in pts]
-        data = [[pts, y, 'bo']]
-        pts = [pts[x] for x in range(0, 101, 5)]
-        y = [y[k] for k in range(0, 101, 5)]
-        data.append([pts, y, 'go'])
 
-        # plot
-        fig, ax = plt.subplots(nrows=1, ncols=1)
-        for x, y, style in data:
-            ax.plot(x, y, style)
+    def _bops_loss(self, modelBops):
+        #Parameters that were found emphirical
 
-        ax.set_xticks(pts)
-        ax.set_yticks(y)
-        ax.set_xlabel('bops/maxBops')
-        ax.set_ylabel('Loss')
-        ax.set_title('Bops ratio loss function')
-        fig.set_size_inches(15, 10)
+        scale_diff = (modelBops - self.maxBops) / self.maxBops
+        strech_factor = 20
+        reward = tensor(-1.1).cuda()
+        return (self.penalization_func((strech_factor * scale_diff) + reward) + 1) * 2.5
 
-        fig.savefig('{}/bops_loss_func.png'.format(folderName))
 
     # structure =
-    # @(acc_, x, scale, stretchFactor)
-    #
-    # (tanh((acc_ - x) * stretchFactor) * scale);
+    # @(acc_, x, scale, stretchFactor) (tanh((acc_ - x) * stretchFactor) * scale);
     #
     # acc = 1;
     # scale = 1;
