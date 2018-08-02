@@ -87,7 +87,7 @@ class MixedConv(MixedOp):
 
         super(MixedConv, self).__init__()
 
-        self.bops = [count_flops(op, 32, self.in_planes) for op in self.ops]
+        self.bops = [count_flops(op, 1, self.in_planes) for op in self.ops]
 
     def initOps(self):
         ops = ModuleList()
@@ -116,7 +116,7 @@ class MixedConvWithReLU(MixedOp):
 
         super(MixedConvWithReLU, self).__init__()
 
-        self.bops = [count_flops(op, 32, self.in_planes) for op in self.ops]
+        self.bops = [count_flops(op, 1, self.in_planes) for op in self.ops]
 
         if useResidual:
             self.forward = self.residualForward

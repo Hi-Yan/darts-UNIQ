@@ -1,7 +1,7 @@
 #### https://github.com/warmspringwinds/pytorch-segmentation-detection/blob/master/pytorch_segmentation_detection/utils/flops_benchmark.py
 from math import ceil, log2
 from torch.nn.modules.conv import Conv2d
-from torch import randn, float32
+from torch import randn
 
 # ---TBD :: Need to pass this arguments from imagenet.py
 param_bitwidth = 4
@@ -302,29 +302,27 @@ def add_bitwidths_attr(model, param_bitwidth, act_bitwidth):
 
 
 def count_flops(model, input_size, in_channels):
-    dtype = float32
     batch_size = 32
-    device = 'cuda:0'
 
     net = model
     # net.prepare_uniq()
 
     net = add_flops_counting_methods(net)
 
-    net.to(device=device, dtype=dtype)
+    net.cuda()
     net = net.train()
 
-    batch = randn(batch_size, in_channels, input_size, input_size).to(device=device, dtype=dtype)
+    batch = randn(batch_size, in_channels, input_size, input_size).cuda()
     net.start_flops_count()
 
-    # _ = net(batch)
-    if model.useResidual:
+    if net.useResidual:
         _ = net(batch, batch)
     else:
         _ = net(batch)
 
     flops, bops = net.compute_average_flops_cost() / 2, net.compute_average_bops_cost()
     net.stop_flops_count()
+    # TODO: bop==0 for Linear layer ???
 
-    # return flops, bops  # Result in FLOPs
+    # return (flops, bops)  # Result in FLOPs
     return bops
