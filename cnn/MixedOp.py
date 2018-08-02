@@ -43,10 +43,16 @@ class MixedOp(Module):
         # self.alphas = tensor(randn(self.numOfOps()).cuda(), requires_grad=True)
         value = 1.0 / self.numOfOps()
         self.alphas = tensor((ones(self.numOfOps()) * value).cuda(), requires_grad=True)
+        # init bops for operation
+        self.bops = self.countBops()
 
     @abstractmethod
     def initOps(self):
         raise NotImplementedError('subclasses must override initOps()!')
+
+    @abstractmethod
+    def countBops(self):
+        raise NotImplementedError('subclasses must override countBops()!')
 
     def forward(self, x):
         weights = F.softmax(self.alphas, dim=-1)
@@ -54,6 +60,9 @@ class MixedOp(Module):
 
     def numOfOps(self):
         return len(self.ops)
+
+    def getBops(self):
+        return self.bops
 
 
 class MixedLinear(MixedOp):
@@ -64,8 +73,6 @@ class MixedLinear(MixedOp):
 
         super(MixedLinear, self).__init__()
 
-        self.bops = [count_flops(op, self.in_features, 1) for op in self.ops]
-
     def initOps(self):
         ops = ModuleList()
         for bitwidth in self.bitwidths:
@@ -74,6 +81,9 @@ class MixedLinear(MixedOp):
             ops.append(op)
 
         return ops
+
+    def countBops(self):
+        return [count_flops(op, self.in_features, 1) for op in self.ops]
 
 
 class MixedConv(MixedOp):
@@ -86,8 +96,6 @@ class MixedConv(MixedOp):
         self.stride = stride
 
         super(MixedConv, self).__init__()
-
-        self.bops = [count_flops(op, 1, self.in_planes) for op in self.ops]
 
     def initOps(self):
         ops = ModuleList()
@@ -103,6 +111,9 @@ class MixedConv(MixedOp):
 
         return ops
 
+    def countBops(self):
+        return [count_flops(op, 1, self.in_planes) for op in self.ops]
+
 
 class MixedConvWithReLU(MixedOp):
     def __init__(self, bitwidths, in_planes, out_planes, kernel_size, stride, useResidual=False):
@@ -115,8 +126,6 @@ class MixedConvWithReLU(MixedOp):
         self.useResidual = useResidual
 
         super(MixedConvWithReLU, self).__init__()
-
-        self.bops = [count_flops(op, 1, self.in_planes) for op in self.ops]
 
         if useResidual:
             self.forward = self.residualForward
@@ -139,6 +148,9 @@ class MixedConvWithReLU(MixedOp):
                     ops.append(op)
 
         return ops
+
+    def countBops(self):
+        return [count_flops(op, 1, self.in_planes) for op in self.ops]
 
     def residualForward(self, x, residual):
         weights = F.softmax(self.alphas, dim=-1)
