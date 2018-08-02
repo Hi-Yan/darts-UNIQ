@@ -21,6 +21,7 @@ from cnn.utils import initLogger, printModelToFile, initTrainLogger, logDominant
 from cnn.utils import load_data, load_pre_trained
 from cnn.resnet_model_search import ResNet
 from cnn.architect import Architect
+from cnn.uniq_loss import UniqLoss
 
 
 def parseArgs():
@@ -59,6 +60,11 @@ def parseArgs():
     parser.add_argument('--nBitsMax', type=int, default=3, choices=range(1, 32 + 1), help='max number of bits')
     parser.add_argument('--bitwidth', type=str, default=None, help='list of bitwidth values, e.g. 1,4,16')
     parser.add_argument('--kernel', type=str, default='3', help='list of conv kernel sizes, e.g. 1,3,5')
+
+    parser.add_argument('--loss', type=str, default='UniqLoss', choices=['CrossEntropy', 'UniqLoss'])
+    parser.add_argument('--lmbda', type=float, default=1.0, help='Lambda value for UniqLoss')
+    parser.add_argument('--MaxBopsBits', type=int, default=3, choices=range(1, 32), help='maximum bits for uniform division')
+
     args = parser.parse_args()
 
     # convert epochs to list
@@ -181,7 +187,10 @@ torch_manual_seed(args.seed)
 cudnn.enabled = True
 cuda_manual_seed(args.seed)
 
-criterion = CrossEntropyLoss()
+cross_entropy = CrossEntropyLoss().cuda()
+if args.loss == 'CrossEntropy':
+    args.lmbda = 0
+criterion = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, batch_size=args.kernel)
 criterion = criterion.cuda()
 # criterion = criterion.to(args.device)
 model = ResNet(criterion, args.bitwidth, args.kernel)
@@ -238,7 +247,8 @@ for epoch in range(1, nEpochs + 1):
     # print(F.softmax(model.alphas_reduce, dim=-1))
 
     # training
-    train_acc, train_loss = train(train_queue, search_queue, args, model, architect, criterion, optimizer, lr, trainLogger)
+    train_acc, train_loss = train(train_queue, search_queue, args, model, architect, cross_entropy,
+                                  optimizer, lr, trainLogger)
 
     # log accuracy, loss, etc.
     message = 'Epoch:[{}] , training accuracy:[{:.3f}] , training loss:[{:.3f}] , optimizer_lr:[{:.5f}], scheduler_lr:[{:.5f}]' \
@@ -255,7 +265,7 @@ for epoch in range(1, nEpochs + 1):
     # switch stage, i.e. freeze one more layer
     if (epoch in epochsSwitchStage) or (epoch == nEpochs):
         # validation
-        valid_acc, valid_loss = infer(valid_queue, args, model, criterion, trainLogger)
+        valid_acc, valid_loss = infer(valid_queue, args, model, cross_entropy, trainLogger)
         message = 'Epoch:[{}] , validation accuracy:[{:.3f}] , validation loss:[{:.3f}]'.format(epoch, valid_acc,
                                                                                                 valid_loss)
         logger.info(message)
