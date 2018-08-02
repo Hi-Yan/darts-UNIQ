@@ -1,11 +1,12 @@
 from torch.nn import CrossEntropyLoss, Module
 from cnn.resnet_model_search import ResNet
-from numpy import linspace
+from numpy import linspace, arctanh
 import matplotlib.pyplot as plt
+from math import tanh
 
 
 class UniqLoss(Module):
-    def __init__(self, lmdba, MaxBopsBits, kernel_sizes):
+    def __init__(self, lmdba, MaxBopsBits, kernel_sizes, folderName):
         super(UniqLoss, self).__init__()
         self.lmdba = lmdba
         self.search_loss = CrossEntropyLoss().cuda()
@@ -14,6 +15,10 @@ class UniqLoss(Module):
         # build model for uniform distribution of bits
         uniform_model = ResNet(self.search_loss, bitwidths=[MaxBopsBits], kernel_sizes=kernel_sizes)
         self.maxBops = uniform_model.countBops()
+
+        # init bops loss function
+        self.bopsLoss = self.__tanh(xDst=1, yDst=0.5, yMin=0, yMax=5)
+        self.plotFunction(self.bopsLoss, folderName)
 
     def forward(self, input, target, modelBops):
         # big penalization if bops over MaxBops
@@ -24,13 +29,36 @@ class UniqLoss(Module):
 
         return self.search_loss(input, target) + (self.lmdba * quant_loss)
 
+    def __tanh(self, xDst, yDst, yMin, yMax):
+        factor = 10
+
+        yDelta = yMin - (-1)
+        scale = yMax / (1 + yDelta)
+
+        v = (yDst / scale) - yDelta
+        v = arctanh(v)
+        v /= factor
+        v = round(v, 5)
+        v = xDst - v
+
+        def t(x):
+            # out = (x - v) * factor
+            # out = tanh(out)
+            # out = (out + yDelta) * scale
+            return (tanh((x - v) * factor) + yDelta) * scale
+
+        return t
+
     def plotFunction(self, func, folderName):
         # build data for function
-        pts = linspace(0, 1, 101).tolist()
+        nPts = 201
+        ptsGap = 5
+
+        pts = linspace(0, 2, nPts).tolist()
         y = [round(func(x), 5) for x in pts]
         data = [[pts, y, 'bo']]
-        pts = [pts[x] for x in range(0, 101, 5)]
-        y = [y[k] for k in range(0, 101, 5)]
+        pts = [pts[x] for x in range(0, nPts, ptsGap)]
+        y = [y[k] for k in range(0, nPts, ptsGap)]
         data.append([pts, y, 'go'])
 
         # plot
@@ -43,7 +71,7 @@ class UniqLoss(Module):
         ax.set_xlabel('bops/maxBops')
         ax.set_ylabel('Loss')
         ax.set_title('Bops ratio loss function')
-        fig.set_size_inches(15, 10)
+        fig.set_size_inches(25, 10)
 
         fig.savefig('{}/bops_loss_func.png'.format(folderName))
 
