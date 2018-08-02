@@ -2,6 +2,10 @@ from torch.nn import CrossEntropyLoss, Module, Tanh
 from torch import tensor, float32
 from cnn.resnet_model_search import ResNet
 from numpy import arctanh, linspace
+
+import matplotlib
+
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
