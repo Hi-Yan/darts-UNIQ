@@ -14,9 +14,9 @@ class UniqLoss(Module):
         # build model for uniform distribution of bits
         uniform_model = ResNet(self.search_loss, bitwidths=[MaxBopsBits], kernel_sizes=kernel_sizes)
         self.maxBops = uniform_model.countBops()
-        self.bops_base_func = Tanh()
 
-        # init bops loss function
+        # init bops loss function and plot it
+        self.bops_base_func = Tanh()
         self.bopsLoss = self._bops_loss(xDst=1, yDst=0.2, yMin=0, yMax=5)
         self.plotFunction(self.bopsLoss, folderName)
 
@@ -27,6 +27,7 @@ class UniqLoss(Module):
 
         return self.search_loss(input, target) + (self.lmdba * self.quant_loss)
 
+    # given the 4 values, generate the appropriate tanh() function, s.t. t(xDst)=yDst & max{t}=yMax & min{t}=yMin
     def _bops_loss(self, xDst, yDst, yMin, yMax):
         factor = 20
 
