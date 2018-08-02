@@ -1,5 +1,6 @@
 from UNIQ.uniq import UNIQNet
 from UNIQ.actquant import ActQuant
+from UNIQ.flops_benchmark import count_flops
 from torch import tensor, ones
 from torch.nn import Module, ModuleList, Conv2d, BatchNorm2d, Sequential, Linear, ReLU
 import torch.nn.functional as F
@@ -15,6 +16,7 @@ class QuantizedOp(UNIQNet):
                                           step_setup=[1, 1],
                                           bitwidth=bitwidth, act_bitwidth=act_bitwidth)
 
+        self.useResidual = useResidual
         self.forward = self.residualForward if useResidual else self.standardForward
 
         self.op = op.cuda()
@@ -62,6 +64,8 @@ class MixedLinear(MixedOp):
 
         super(MixedLinear, self).__init__()
 
+        self.bops = [count_flops(op, self.in_features, 1) for op in self.ops]
+
     def initOps(self):
         ops = ModuleList()
         for bitwidth in self.bitwidths:
@@ -82,6 +86,8 @@ class MixedConv(MixedOp):
         self.stride = stride
 
         super(MixedConv, self).__init__()
+
+        self.bops = [count_flops(op, 32, self.in_planes) for op in self.ops]
 
     def initOps(self):
         ops = ModuleList()
@@ -109,6 +115,8 @@ class MixedConvWithReLU(MixedOp):
         self.useResidual = useResidual
 
         super(MixedConvWithReLU, self).__init__()
+
+        self.bops = [count_flops(op, 32, self.in_planes) for op in self.ops]
 
         if useResidual:
             self.forward = self.residualForward

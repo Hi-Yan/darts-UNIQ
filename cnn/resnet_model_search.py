@@ -3,8 +3,10 @@ from torch.nn import Module, Conv2d, AvgPool2d
 import torch.nn.functional as F
 from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
+from UNIQ.flops_benchmark import count_flops
 from cnn.MixedOp import MixedConv, MixedConvWithReLU, MixedLinear, MixedOp, QuantizedOp
 from collections import OrderedDict
+from torch import float32
 
 
 def save_quant_state(self, _):
