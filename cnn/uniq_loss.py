@@ -1,5 +1,7 @@
 from torch.nn import CrossEntropyLoss, Module
 from cnn.resnet_model_search import ResNet
+from numpy import linspace
+import matplotlib.pyplot as plt
 
 
 class UniqLoss(Module):
@@ -21,6 +23,29 @@ class UniqLoss(Module):
         quant_loss = penalization_factor * (modelBops / self.maxBops)
 
         return self.search_loss(input, target) + (self.lmdba * quant_loss)
+
+    def plotFunction(self, func, folderName):
+        # build data for function
+        pts = linspace(0, 1, 101).tolist()
+        y = [round(func(x), 5) for x in pts]
+        data = [[pts, y, 'bo']]
+        pts = [pts[x] for x in range(0, 101, 5)]
+        y = [y[k] for k in range(0, 101, 5)]
+        data.append([pts, y, 'go'])
+
+        # plot
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        for x, y, style in data:
+            ax.plot(x, y, style)
+
+        ax.set_xticks(pts)
+        ax.set_yticks(y)
+        ax.set_xlabel('bops/maxBops')
+        ax.set_ylabel('Loss')
+        ax.set_title('Bops ratio loss function')
+        fig.set_size_inches(15, 10)
+
+        fig.savefig('{}/bops_loss_func.png'.format(folderName))
 
     # structure =
     # @(acc_, x, scale, stretchFactor)
