@@ -10,13 +10,13 @@ import matplotlib.pyplot as plt
 
 
 class UniqLoss(Module):
-    def __init__(self, lmdba, MaxBopsBits, kernel_sizes, folderName):
+    def __init__(self, lmdba, MaxBopsBits, kernel_sizes, bopsFuncKey, folderName):
         super(UniqLoss, self).__init__()
         self.lmdba = lmdba
         self.search_loss = CrossEntropyLoss().cuda()
 
         # build model for uniform distribution of bits
-        uniform_model = ResNet(self.search_loss, bitwidths=[MaxBopsBits], kernel_sizes=kernel_sizes)
+        uniform_model = ResNet(self.search_loss, bitwidths=[MaxBopsBits], kernel_sizes=kernel_sizes, bopsFuncKey=bopsFuncKey)
         self.maxBops = uniform_model.countBops()
 
         # init bops loss function and plot it

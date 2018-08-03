@@ -64,6 +64,9 @@ def parseArgs(lossFuncsLambda):
     parser.add_argument('--loss', type=str, default='UniqLoss', choices=[key for key in lossFuncsLambda.keys()])
     parser.add_argument('--lmbda', type=float, default=1.0, help='Lambda value for UniqLoss')
     parser.add_argument('--MaxBopsBits', type=int, default=3, choices=range(1, 32), help='maximum bits for uniform division')
+    # select bops counter function
+    bopsCounterKeys = list(ResNet.countBopsFuncs.keys())
+    parser.add_argument('--bopsCounter', type=str, default=bopsCounterKeys[0], choices=bopsCounterKeys)
 
     args = parser.parse_args()
 
@@ -197,10 +200,11 @@ cudnn.enabled = True
 cuda_manual_seed(args.seed)
 
 cross_entropy = CrossEntropyLoss().cuda()
-crit = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel, folderName=args.save)
+crit = UniqLoss(lmdba=args.lmbda, MaxBopsBits=args.MaxBopsBits, kernel_sizes=args.kernel,
+                bopsFuncKey=args.bopsCounter, folderName=args.save)
 crit = crit.cuda()
 # criterion = criterion.to(args.device)
-model = ResNet(crit, args.bitwidth, args.kernel)
+model = ResNet(crit, args.bitwidth, args.kernel, args.bopsCounter)
 # model = DataParallel(model, args.gpu)
 model = model.cuda()
 # model = model.to(args.device)

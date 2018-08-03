@@ -3,10 +3,8 @@ from torch.nn import Module, Conv2d, AvgPool2d
 import torch.nn.functional as F
 from UNIQ.actquant import ActQuant
 from UNIQ.quantize import backup_weights, restore_weights, quantize
-from UNIQ.flops_benchmark import count_flops
-from cnn.MixedOp import MixedConv, MixedConvWithReLU, MixedLinear, MixedOp, QuantizedOp
+from cnn.MixedOp import MixedConv, MixedConvWithReLU, MixedLinear, MixedOp
 from collections import OrderedDict
-from torch import float32
 
 
 def save_quant_state(self, _):
@@ -55,8 +53,38 @@ class BasicBlock(Module):
 class ResNet(Module):
     nClasses = 10  # cifar-10
 
-    def __init__(self, criterion, bitwidths, kernel_sizes):
+    # counts the entire model bops in continuous mode
+    def countBopsContinuous(self):
+        totalBops = 0
+        for layer in self.layersList:
+            weights = F.softmax(layer.alphas, dim=-1)
+            for w, b in zip(weights, layer.bops):
+                totalBops += (w * b)
+
+        return totalBops
+
+    # counts the entire model bops in discrete mode
+    def countBopsDiscrete(self):
+        totalBops = 0
+        for layer in self.layersList:
+            weights = F.softmax(layer.alphas, dim=-1)
+            # we take the layer operation with the highest weight
+            maxIdx = weights.argmax(dim=-1).item()
+            totalBops += layer.bops[maxIdx]
+
+        return totalBops
+
+    def countBops(self):
+        # wrapper is needed because countBopsFuncs is defined outside __init__()
+        return self.countBopsFunc(self)
+
+    countBopsFuncs = dict(continuous=countBopsContinuous, discrete=countBopsDiscrete)
+
+    def __init__(self, criterion, bitwidths, kernel_sizes, bopsFuncKey):
         super(ResNet, self).__init__()
+
+        # set bops counter function
+        self.countBopsFunc = self.countBopsFuncs[bopsFuncKey]
 
         # init MixedConvWithReLU layers list
         self.layersList = []
@@ -146,17 +174,8 @@ class ResNet(Module):
 
         return res
 
-    # counts the entire model bops
-    def countBops(self):
-        totalBops = 0
-        for layer in self.layersList:
-            weights = F.softmax(layer.alphas, dim=-1)
-            for w, b in zip(weights, layer.bops):
-                totalBops += (w * b)
+        # return top k operations per layer
 
-        return totalBops
-
-    # return top k operations per layer
     def topOps(self, k):
         top = []
         for layer in self.layersList:
