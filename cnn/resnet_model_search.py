@@ -174,8 +174,7 @@ class ResNet(Module):
 
         return res
 
-        # return top k operations per layer
-
+    # return top k operations per layer
     def topOps(self, k):
         top = []
         for layer in self.layersList:
