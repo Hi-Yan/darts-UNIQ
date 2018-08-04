@@ -116,12 +116,17 @@ def create_exp_dir(path, scripts_to_save=None):
             copyfile(script, dst_file)
 
 
-def save_state(state, is_best, path='.', filename='model'):
-    fileType = 'pth.tar'
-    default_filename = '{}/{}_checkpoint.{}'.format(path, filename, fileType)
+checkpointFileType = 'pth.tar'
+stateFilenameDefault = 'model'
+stateCheckpointPattern = '{}/{}_checkpoint.' + checkpointFileType
+stateOptModelPattern = '{}/{}_opt.' + checkpointFileType
+
+
+def save_state(state, is_best, path='.', filename=stateFilenameDefault):
+    default_filename = stateCheckpointPattern.format(path, filename)
     saveModel(state, default_filename)
     if is_best:
-        copyfile(default_filename, '{}/{}_opt.{}'.format(path, filename, fileType))
+        copyfile(default_filename, stateOptModelPattern.format(path, filename))
 
 
 def save_checkpoint(path, model, epoch, best_prec1, is_best=False):
