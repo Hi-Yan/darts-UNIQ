@@ -76,7 +76,7 @@ model = model.cuda()
 # load pre-trained full-precision model
 load_pre_trained(args.pre_trained, model, logger, args.gpu[0])
 
-# load optimal model
+# load optimal model checkpoint
 optModelChkpnt = stateOptModelPattern.format(args.save, stateFilenameDefault)
 optModelChkpnt = loadModel(optModelChkpnt, map_location=lambda storage, loc: storage.cuda(args.gpu[0]))
 # load alphas from checkpoint
@@ -90,9 +90,9 @@ logger.info("args = %s", args)
 logger.info('Learnable params:[{}]'.format(len(model.learnable_params)))
 logger.info('alphas tensor size:[{}]'.format(model.arch_parameters()[0].size()))
 
-# set train_portion to 1.0
+# set train_portion to 1.0, we do not optimize architecture now, only model weights
 args.train_portion = 1.0
 # set train folder
 args.trainFolder = 'train_opt'
-
+# do the magic
 optimize(args, model, logger)
