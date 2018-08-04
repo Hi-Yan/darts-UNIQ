@@ -22,6 +22,7 @@ def parseArgs():
     parser.add_argument('--epochs', type=str,
                         help='num of training epochs per layer, as list, e.g. 5,4,3,8,6.'
                              'If len(epochs)<len(layers) then last value is used for rest of the layers')
+    parser.add_argument('--batch_size', type=int, default=None, help='batch size')
 
     args = parser.parse_args()
     # update folder location
@@ -85,6 +86,7 @@ model.toDiscrete()
 
 # print model to file
 printModelToFile(model, args.save, fname='opt_model')
+logger.info("args = %s", args)
 logger.info('Learnable params:[{}]'.format(len(model.learnable_params)))
 logger.info('alphas tensor size:[{}]'.format(model.arch_parameters()[0].size()))
 
