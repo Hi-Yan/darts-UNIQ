@@ -24,6 +24,10 @@ class UniqLoss(Module):
         self.bopsLoss = self._bops_loss(xDst=1, yDst=0.2, yMin=0, yMax=5)
         self.plotFunction(self.bopsLoss, folderName)
 
+        # init values
+        self.bopsRatio = -1
+        self.quant_loss = -1
+
     def forward(self, input, target, modelBops):
         # big penalization if bops over MaxBops
         self.bopsRatio = modelBops / self.maxBops
