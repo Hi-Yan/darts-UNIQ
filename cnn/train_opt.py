@@ -7,7 +7,6 @@ from torch.cuda import manual_seed as cuda_manual_seed
 from torch import manual_seed as torch_manual_seed
 from torch import load as loadModel
 import torch.backends.cudnn as cudnn
-from torch.nn import CrossEntropyLoss
 
 from cnn.utils import initLogger, load_pre_trained, stateOptModelPattern, stateFilenameDefault
 from cnn.utils import printModelToFile
