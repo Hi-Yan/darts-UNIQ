@@ -43,7 +43,7 @@ def train(train_queue, search_queue, args, model, architect, crit, optimizer, lr
         loss = crit(logits, target)
 
         loss.backward()
-        clip_grad_norm(model.parameters(), args.grad_clip)
+        clip_grad_norm_(model.parameters(), args.grad_clip)
         optimizer.step()
 
         prec1, prec5 = accuracy(logits, target, topk=(1, 5))

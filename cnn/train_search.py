@@ -63,7 +63,7 @@ def parseArgs(lossFuncsLambda):
 
     args = parser.parse_args()
 
-    # manipulaye lambda value according to selected loss
+    # manipulate lambda value according to selected loss
     lossLambda = lossFuncsLambda[args.loss]
     args.lmbda *= lossLambda
 
@@ -74,7 +74,7 @@ def parseArgs(lossFuncsLambda):
     if args.bitwidth:
         args.bitwidth = [int(i) for i in args.bitwidth.split(',')]
     else:
-        args.bitwidth = range(args.nBitsMin, args.nBitsMax + 1)
+        args.bitwidth = list(range(args.nBitsMin, args.nBitsMax + 1))
 
     # convert kernel sizes to list, sorted ascending
     args.kernel = [int(i) for i in args.kernel.split(',')]
