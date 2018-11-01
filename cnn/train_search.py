@@ -1,21 +1,26 @@
 from torch.multiprocessing import set_start_method
 from sys import exit, argv
-from time import strftime
+from time import strftime, time
 import numpy as np
 import argparse
 from traceback import format_exc
-from os import getpid
-from os.path import dirname, abspath
+from os import getpid, makedirs
+from os.path import dirname, abspath, exists
 from inspect import getfile, currentframe, isclass
 
 import torch.backends.cudnn as cudnn
+from torch.autograd.variable import Variable
 from torch.cuda import is_available, set_device
 from torch.cuda import manual_seed as cuda_manual_seed
 from torch import manual_seed as torch_manual_seed
+from torch.nn.parallel.data_parallel import DataParallel
+from torch.optim.sgd import SGD
+from torch.nn.modules.loss import CrossEntropyLoss
 
 import cnn.trainRegime as trainRegimes
 from cnn.HtmlLogger import HtmlLogger
-from cnn.utils import create_exp_dir, saveArgsToJSON, loadGradEstimatorsNames, loadModelNames, models, sendEmail, loadDatasets
+from cnn.utils import create_exp_dir, saveArgsToJSON, loadGradEstimatorsNames, loadModelNames, models, sendEmail, loadDatasets, load_data
+from cnn.utils import AvgrageMeter, accuracy
 
 
 # collect possible alphas optimization
@@ -159,6 +164,94 @@ if __name__ == '__main__':
         set_start_method('spawn', force=True)
     except RuntimeError:
         raise ValueError('spawn failed')
+
+    # build model for uniform distribution of bits
+    modelClass = models.__dict__[args.model]
+    # init model
+    model = modelClass(args)
+    model = model.cuda()
+
+    modelParallel = DataParallel(model, args.gpu)
+    modelParallel = modelParallel.cuda()
+
+    # load data
+    train_queue, search_queue, valid_queue, statistics_queue = load_data(args)
+
+    # extend epochs list as number of model layers
+    while len(args.epochs) < model.nLayers():
+        args.epochs.append(args.epochs[-1])
+    # init epochs number where we have to switch stage in
+    epochsSwitchStage = [0]
+    for e in args.epochs:
+        epochsSwitchStage.append(e + epochsSwitchStage[-1])
+    # on epochs we learn only Linear layer, infer in every epoch
+    # for _ in range(args.epochs[-1]):
+    for _ in range(10):
+        epochsSwitchStage.append(epochsSwitchStage[-1] + 1)
+
+    # total number of epochs is the last value in epochsSwitchStage
+    nEpochs = epochsSwitchStage[-1]
+    # remove epoch 0 from list, we don't want to switch stage at the beginning
+    epochsSwitchStage = epochsSwitchStage[1:]
+
+    # create train folder
+    trainFolderPath = '{}/{}'.format(args.save, args.trainFolder)
+    trainFolderName = 'init_weights_train'
+    folderPath = '{}/{}'.format(trainFolderPath, trainFolderName)
+    if not exists(folderPath):
+        makedirs(folderPath)
+
+    # init optimizer
+    optimizer = SGD(modelParallel.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+    # init criterion
+    crit = CrossEntropyLoss().cuda()
+
+    modelParallel.train()
+
+    for epoch in range(1, nEpochs + 1):
+        print('========== Epoch:[{}] =============='.format(epoch))
+        loss_container = AvgrageMeter()
+        top1 = AvgrageMeter()
+
+        # remove quantization from staged layers
+        model.removeQuantizationFromStagedLayers()
+        # set pre & post forward hooks
+        model.setWeightsTrainingHooks()
+
+        for step, (input, target) in enumerate(train_queue):
+            print('step:[{}]'.format(step))
+            startTime = time()
+            n = input.size(0)
+
+            input = Variable(input, requires_grad=False).cuda()
+            target = Variable(target, requires_grad=False).cuda(async=True)
+
+            # optimize model weights
+            optimizer.zero_grad()
+            logits = modelParallel(input)
+            # calc loss
+            loss = crit(logits, target)
+            # back propagate
+            loss.backward()
+            # update weights
+            optimizer.step()
+
+            prec1 = accuracy(logits, target)[0]
+            loss_container.update(loss.item(), n)
+            top1.update(prec1.item(), n)
+
+            endTime = time()
+
+        # remove pre & post forward hooks
+        model.removeWeightsTrainingHooks()
+        # quantize staged layers
+        model.restoreQuantizationForStagedLayers()
+
+        # switch stage, i.e. freeze one more layer
+        if (epoch in epochsSwitchStage) or (epoch == nEpochs):
+            switchStageFlag = model.switch_stage()
+
+    exit(0)
 
     try:
         # log command line

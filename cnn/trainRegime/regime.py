@@ -7,6 +7,7 @@ from torch.autograd.variable import Variable
 from torch.nn import CrossEntropyLoss
 from torch.nn.utils.clip_grad import clip_grad_norm_
 from torch.optim import SGD
+from torch.nn.parallel.data_parallel import DataParallel
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from cnn.HtmlLogger import HtmlLogger
@@ -61,6 +62,9 @@ class TrainRegime:
         model = modelClass(args)
         model = model.cuda()
 
+        modelParallel = DataParallel(model, args.gpu)
+        modelParallel = modelParallel.cuda()
+
         # load partition if exists
         if args.partition is not None:
             assert (isinstance(args.partition, list))
@@ -77,15 +81,16 @@ class TrainRegime:
         # ==================================================================
         # load data
         self.train_queue, self.search_queue, self.valid_queue, self.statistics_queue = load_data(args)
-        # load pre-trained full-precision model
-        args.loadedOpsWithDiffWeights = model.loadPreTrained(args.pre_trained, logger, args.gpu[0])
-        # args.loadedOpsWithDiffWeights = False
+        # # load pre-trained full-precision model
+        # args.loadedOpsWithDiffWeights = model.loadPreTrained(args.pre_trained, logger, args.gpu[0])
+        args.loadedOpsWithDiffWeights = False
 
         # log parameters
         logParameters(logger, args, model)
 
         self.args = args
         self.model = model
+        self.modelParallel = modelParallel
         self.modelClass = modelClass
         self.logger = logger
 
@@ -496,6 +501,9 @@ class TrainRegime:
         model = self.model
 
         # quantize staged layers
+        model.restoreQuantizationForStagedLayers()
+        # remove pre & post forward hooks
+        model.removeWeightsTrainingHooks()# quantize staged layers
         model.restoreQuantizationForStagedLayers()
         # remove pre & post forward hooks
         model.removeWeightsTrainingHooks()

@@ -121,7 +121,10 @@ class ActQuantBuffers(ActQuant):  # This class exist to allow multi-gpu run
         self.register_buffer('clamp_val', torch.zeros(1))
 
         # set forward function
-        self.forward = self.standardForward
+        self.forwardFunc = self.standardForward
+
+    def forward(self, input):
+        return self.forwardFunc(input)
 
     def standardForward(self, input):
         assert (isinstance(self.bitwidth, int))

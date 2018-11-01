@@ -1,5 +1,6 @@
 from abc import abstractmethod
 from torch.nn import Module, Conv2d, Linear
+from torch.cuda import current_device
 
 from NICE.quantize import quantize, backup_weights, restore_weights
 from NICE.actquant import ActQuant
@@ -80,7 +81,7 @@ class UNIQNet(Module):
             layer.__act_bitwidth__ = self.act_bitwidth
 
         self.full_parameters = {}
-        self.layers_list = self.build_layers_list()
+        self.layers_list = []
 
         # self.statistics_phase = False
         # self.allow_grad = False
@@ -97,12 +98,16 @@ class UNIQNet(Module):
     def derivedClassSpecific(self, params):
         raise NotImplementedError('subclasses must override derivedClassSpecific()!')
 
+    def refreshOpsList(self):
+        self.layers_list = self.build_layers_list()
+
     def build_layers_list(self):
-        modules_list = list(self.modules())
-        return [x for x in modules_list if isinstance(x, Conv2d) or isinstance(x, Linear) or isinstance(x, ActQuant)]
+        return [x for x in self.modules() if isinstance(x, Conv2d) or isinstance(x, Linear) or isinstance(x, ActQuant)]
 
     def quantizeFunc(self):
+        deviceID = self.layers_list[0].weight.device.index
         assert (len(self.bitwidth) == 1)
+        assert (current_device() == deviceID)
         assert (self.full_parameters == {})
         assert (self.quant is True)
         assert (self.noise is False)
@@ -114,8 +119,9 @@ class UNIQNet(Module):
         self.quantize.quantize_uniform_improved(layers_list)
 
     def add_noise(self):
+        deviceName = str(self.layers_list[0].weight.device)
         assert (len(self.bitwidth) == 1)
-        assert (self.full_parameters == {})
+        assert (deviceName not in self.full_parameters)
         assert (self.noise is True)
         assert (self.training is True)
         assert (self.quant is False)
@@ -125,9 +131,10 @@ class UNIQNet(Module):
         self.quantize.add_improved_uni_noise(layers_list)
 
     def restore_state(self):
-        assert (self.full_parameters != {})
+        deviceName = str(self.layers_list[0].weight.device)
+        assert (deviceName in self.full_parameters)
         restore_weights(self.layers_list, self.full_parameters)
-        self.full_parameters = {}
+        del self.full_parameters[deviceName]
 
     # def layers_steps(self):
     #     split_layers = self.split_one_layer_with_parameter_in_step()

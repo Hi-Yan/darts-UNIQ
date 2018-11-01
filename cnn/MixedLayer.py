@@ -70,9 +70,7 @@ class MixedLayer(Block):
 
         # init list of all operations (including copies) as single long list
         # for cases we have to modify all ops
-        self.opsList = []
-        for filter in self.filters:
-            self.opsList.extend(filter.getOps())
+        self._opsList = self.buildOpsList()
 
         # set forward function
         if useResidual:
@@ -89,9 +87,12 @@ class MixedLayer(Block):
     def nFilters(self):
         return len(self.filters)
 
+    def getLayers(self):
+        return [self]
+
     def quantize(self, layerIdx):
         assert (self.added_noise is False)
-        for op in self.opsList:
+        for op in self._opsList:
             assert (op.noise is False)
             assert (op.quant is False)
             op.quant = True
@@ -110,7 +111,7 @@ class MixedLayer(Block):
         assert (self.quantized is True)
         assert (self.added_noise is False)
 
-        for op in self.opsList:
+        for op in self._opsList:
             assert (op.quant is True)
             op.quant = False
             op.restore_state()
@@ -126,7 +127,7 @@ class MixedLayer(Block):
     # noise is being added in pre-forward hook
     def turnOnNoise(self, layerIdx):
         assert (self.quantized is False)
-        for op in self.opsList:
+        for op in self._opsList:
             assert (op.noise is False)
             op.noise = True
 
@@ -137,7 +138,7 @@ class MixedLayer(Block):
         assert (self.quantized is False)
         assert (self.added_noise is True)
 
-        for op in self.opsList:
+        for op in self._opsList:
             assert (op.noise is True)
             op.noise = False
 
@@ -268,8 +269,25 @@ class MixedLayer(Block):
         outputBitwidth = [f.getCurrentOutputBitwidth() for f in self.filters]
         return outputBitwidth
 
-    def getOps(self):
-        return self.opsList
+    def buildOpsList(self):
+        opsList = []
+
+        for filter in self.filters:
+            opsList.extend(filter.opsList())
+
+        return opsList
+
+    def refreshOpsList(self):
+        opsList = []
+
+        for filter in self.filters:
+            opsList.extend(filter.refreshOpsList())
+
+        self._opsList = opsList
+        return self._opsList
+
+    def opsList(self):
+        return self._opsList
 
     def getAllBitwidths(self):
         # it doesn't matter which filter we take, the attributes are the same in all filters

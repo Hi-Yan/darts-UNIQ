@@ -93,9 +93,11 @@ class QuantizedOp(UNIQNet):
 #         # print('grad x: ', grads_x)
 #         return grads_x, grads_alpha
 
-def preForward(self, _):
-    assert (self.hookFlag is False)
-    self.hookFlag = True
+def preForward(self, input):
+    deviceID = input[0].device.index
+    assert (deviceID not in self.hookDevices)
+    self.hookDevices.append(deviceID)
+
     # update previous layer index
     prevLayer = self.prevLayer[0]
     self.prev_alpha_idx = prevLayer.curr_alpha_idx if prevLayer else 0
@@ -108,9 +110,10 @@ def preForward(self, _):
     #     op.add_noise()
 
 
-def postForward(self, _, __):
-    assert (self.hookFlag is True)
-    self.hookFlag = False
+def postForward(self, input, __):
+    deviceID = input[0].device.index
+    assert (deviceID in self.hookDevices)
+    self.hookDevices.remove(deviceID)
 
 
 #
@@ -147,10 +150,7 @@ class MixedFilter(Block):
 
         # init list of all operations (including copies) as single long list
         # for cases we have to modify all ops
-        self.opsList = []
-        for ops in self.ops:
-            for op in ops:
-                self.opsList.append(op)
+        self._opsList = self.buildOpsList()
 
         # init ops forward counters
         self.opsForwardCounters = self.buildOpsForwardCounters()
@@ -161,16 +161,20 @@ class MixedFilter(Block):
         self.optLimitCounter = 0
 
         # set forward function in order to assure that hooks will take place
-        self.forward = self.setForwardFunc()
+        self.forwardFunc = self.setForwardFunc()
         # assign pre & post forward hooks
         self.register_forward_pre_hook(preForward)
         self.register_forward_hook(postForward)
         # # set hook flag, to make sure hook happens
-        # turn it on on pre-forward hook, turn it off on post-forward hook
-        self.hookFlag = False
+        # # turn it on on pre-forward hook, turn it off on post-forward hook
+        # self.hookFlag = False
+        self.hookDevices = []
 
         # list of (mults, adds, calc_mac_value, batch_size) per op
         self.bops = self.countOpsBops(countBopsParams)
+
+    def forward(self, input):
+        return self.forwardFunc(input)
 
     @abstractmethod
     def initOps(self, bitwidths, params):
@@ -260,8 +264,21 @@ class MixedFilter(Block):
     def nOpsCopies(self):
         return len(self.ops)
 
-    def getOps(self):
-        return self.opsList
+    def buildOpsList(self):
+        opsList = []
+        for ops in self.ops:
+            for op in ops:
+                op.refreshOpsList()
+                opsList.append(op)
+
+        return opsList
+
+    def refreshOpsList(self):
+        self._opsList = self.buildOpsList()
+        return self._opsList
+
+    def opsList(self):
+        return self._opsList
 
     # # select random alpha
     # def chooseRandomPath(self):
@@ -347,7 +364,7 @@ class MixedConv(MixedFilter):
         return ops
 
     def forwardConv(self, x):
-        assert (self.hookFlag is True)
+        assert (x.device.index in self.hookDevices)
         op = self.ops[self.prev_alpha_idx][self.curr_alpha_idx].op[0]
         return op(x)
 
@@ -406,7 +423,7 @@ class MixedConvWithReLU(MixedFilter):
         return self.__initOps(bitwidths, params, buildOpFunc)
 
     def forwardConv(self, x):
-        assert (self.hookFlag is True)
+        assert (x.device.index in self.hookDevices)
         op = self.ops[self.prev_alpha_idx][self.curr_alpha_idx].op[0]
         return op(x)
 

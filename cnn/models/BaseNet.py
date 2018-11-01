@@ -20,11 +20,14 @@ from UNIQ.quantize import check_quantization
 # preForward hook for training weights phase.
 # when we train weights, we need to quantize staged layers before forward, and remove quantization after forward in order to update by gradient
 # same for noise, we need to add noise before forward, and remove noise after forward, in order to update by gradient
-def preForward(self, _):
-    assert (self.hookFlag is False)
-    self.hookFlag = True
+def preForward(self, input):
+    deviceID = input[0].device.index
+    assert (deviceID not in self.hookDevices)
+    self.hookDevices.append(deviceID)
 
     assert (self.training is True)
+    # update layers list to new DataParallel layers copies
+    self.layersList = self.buildLayersList()
     # quantize staged layers
     self.restoreQuantizationForStagedLayers()
 
@@ -32,14 +35,15 @@ def preForward(self, _):
     if self.nLayersQuantCompleted < self.nLayers():
         layer = self.layersList[self.nLayersQuantCompleted]
         assert (layer.added_noise is True)
-        for op in layer.opsList:
+        for op in layer.refreshOpsList():
             assert (op.noise is True)
             op.add_noise()
 
 
-def postForward(self, _, __):
-    assert (self.hookFlag is True)
-    self.hookFlag = False
+def postForward(self, input, __):
+    deviceID = input[0].device.index
+    assert (deviceID in self.hookDevices)
+    self.hookDevices.remove(deviceID)
 
     assert (self.training is True)
     # remove quantization from staged layers
@@ -49,7 +53,7 @@ def postForward(self, _, __):
     if self.nLayersQuantCompleted < self.nLayers():
         layer = self.layersList[self.nLayersQuantCompleted]
         assert (layer.added_noise is True)
-        for op in layer.opsList:
+        for op in layer.opsList():
             assert (op.noise is True)
             op.restore_state()
 
@@ -80,6 +84,13 @@ class BaseNet(Module):
 
     alphasCsvFileName = 'alphas.csv'
 
+    def buildLayersList(self):
+        layersList = []
+        for layer in self.layers:
+            layersList.extend(layer.getLayers())
+
+        return layersList
+
     def __init__(self, args, initLayersParams):
         super(BaseNet, self).__init__()
         # init save folder
@@ -87,7 +98,8 @@ class BaseNet(Module):
         # init layers
         self.layers = self.initLayers(initLayersParams)
         # build mixture layers list
-        self.layersList = [m for m in self.modules() if isinstance(m, MixedLayer)]
+        # self.layersList = [m for m in self.modules() if isinstance(m, MixedLayer)]
+        self.layersList = self.buildLayersList()
         # set bops counter function
         self.countBopsFunc = self.countBopsFuncs[args.bopsCounter]
         # init statistics
@@ -110,8 +122,9 @@ class BaseNet(Module):
         # init hooks handlers list
         self.hooksList = []
         # set hook flag, to make sure hook happens
-        # turn it on on pre-forward hook, turn it off on post-forward hook
-        self.hookFlag = False
+        # # turn it on on pre-forward hook, turn it off on post-forward hook
+        # self.hookFlag = False
+        self.hookDevices = []
 
         # init layers permutation list
         self.layersPerm = []
@@ -179,7 +192,7 @@ class BaseNet(Module):
     #                 actQuant.running_std = zeros(1).cuda()
     #                 actQuant.clamp_val.data = zeros(1).cuda()
     #                 # set actquant to statistics forward
-    #                 actQuant.forward = actQuant.statisticsForward
+    #                 actQuant.forwardFunc = actQuant.statisticsForward
     #
     #     # train for statistics
     #     criterion = CrossEntropyLoss().cuda()
@@ -210,7 +223,7 @@ class BaseNet(Module):
     #             # set actquant to standard forward
     #             if actQuant:
     #                 op.quantize.get_act_max_value_from_pre_calc_stats([actQuant])
-    #                 actQuant.forward = actQuant.standardForward
+    #                 actQuant.forwardFunc = actQuant.standardForward
     #
     #         print('Layer [{}] - initial_clamp_value:[{}]'.format(layerIdx, conv.initial_clamp_value.item()))
     #
@@ -250,7 +263,7 @@ class BaseNet(Module):
     # therefore we have to update its value bases on weight_max_int, which is a function of weights bitwidth
     def __updateStatistics(self, loggerFuncs=[]):
         for layer in self.layersList:
-            for op in layer.opsList:
+            for op in layer.opsList():
                 conv = op.getConv()
                 # update layer_basis value based on weights bitwidth
                 conv.layer_basis = conv.initial_clamp_value / op.quantize.weight_max_int
@@ -356,7 +369,7 @@ class BaseNet(Module):
         for layerIdx, layer in enumerate(self.layersList):
             assert (layer.quantized is True)
             assert (layer.added_noise is False)
-            for opIdx, op in enumerate(layer.opsList):
+            for opIdx, op in enumerate(layer.opsList()):
                 assert (check_quantization(op.getConv().weight) <= (2 ** op.bitwidth[0]))
 
         return True
@@ -379,8 +392,8 @@ class BaseNet(Module):
         for layerIdx in range(self.nLayersQuantCompleted):
             layer = self.layersList[layerIdx]
             assert (layer.quantized is True)
-            # quantize layer ops
-            for op in layer.opsList:
+            # remove quantization from layer ops
+            for op in layer.opsList():
                 op.restore_state()
 
     # restore quantization for staged layers after training weights
@@ -390,8 +403,9 @@ class BaseNet(Module):
         for layerIdx in range(self.nLayersQuantCompleted):
             layer = self.layersList[layerIdx]
             assert (layer.quantized is True)
+            # refresh layer ops list. we want ops list to contain the ops DataParallel GPU copies
             # quantize layer ops
-            for op in layer.opsList:
+            for op in layer.refreshOpsList():
                 op.quantizeFunc()
                 assert (check_quantization(op.getConv().weight) <= (2 ** op.bitwidth[0]))
 
