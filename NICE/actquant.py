@@ -124,7 +124,8 @@ class ActQuantBuffers(ActQuant):  # This class exist to allow multi-gpu run
         self.forwardFunc = self.standardForward
 
     def forward(self, input):
-        return self.forwardFunc(input)
+        forwardFunc = self.standardForward
+        return forwardFunc(input)
 
     def standardForward(self, input):
         assert (isinstance(self.bitwidth, int))

@@ -72,9 +72,10 @@ class MixedLayer(Block):
         # for cases we have to modify all ops
         self._opsList = self.buildOpsList()
 
+        self.useResidual = useResidual
         # set forward function
-        if useResidual:
-            self.forward = self.residualForward
+        # if useResidual:
+        #     self.forward = self.residualForward
 
         # # register post forward hook
         # self.register_forward_hook(postForward)
@@ -222,7 +223,9 @@ class MixedLayer(Block):
         return out
 
     # standard forward
-    def forward(self, x):
+    def forward(self, x, residual=None):
+        if self.useResidual:
+            return self.residualForward(x, residual)
         out = self.preResidualForward(x)
         out = self.postResidualForward(out)
 

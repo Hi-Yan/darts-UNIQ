@@ -174,7 +174,8 @@ class MixedFilter(Block):
         self.bops = self.countOpsBops(countBopsParams)
 
     def forward(self, input):
-        return self.forwardFunc(input)
+        forwardFunc = self.setForwardFunc()
+        return forwardFunc(input)
 
     @abstractmethod
     def initOps(self, bitwidths, params):
