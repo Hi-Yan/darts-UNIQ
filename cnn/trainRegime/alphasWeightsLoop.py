@@ -1,16 +1,18 @@
-from os import system, remove, makedirs, getpid
+import json
+import os
+from multiprocessing import Pool, Process
+from os import system, makedirs, getpid
 from os.path import exists
-from multiprocessing import Pool
 from time import sleep
 
-from torch.optim import SGD
-from torch import save as saveCheckpoint
 from torch import load as loadCheckpoint
+from torch import save as saveCheckpoint
+from torch.optim import SGD
 
-from .regime import TrainRegime, save_checkpoint
-from cnn.architect import Architect
-from cnn.HtmlLogger import HtmlLogger
 import cnn.gradEstimators as gradEstimators
+from cnn.HtmlLogger import HtmlLogger
+from cnn.architect import Architect
+from .regime import TrainRegime, save_checkpoint
 
 
 class SimpleLogger(HtmlLogger):
@@ -45,6 +47,71 @@ def __buildCommand(jobTitle, nGPUs, nCPUs, server, data):
     return 'ssh yochaiz@132.68.39.32 srun -o {}.out -I10 --gres=gpu:{} -c {} -w {} -t 01-00:00:00 -p gip,all ' \
            '-J "{}" ' \
            '/home/yochaiz/F-BANNAS/cnn/sbatch_opt.sh --data "{}"'.format(jobTitle, nGPUs, nCPUs, server, jobTitle, data)
+
+
+def check_gpu(aws_instance):
+    aws_instance.switch_window(10)
+    aws_instance.run('gpustat --json > stat')
+    aws_instance.download('stat')
+
+    json_data = open('stat').read()
+
+    data = json.loads(json_data)
+    gpus = data['gpus']
+    free_gpus = []
+    for i, gpu in enumerate(gpus):
+        if len(gpu['processes']) == 0:
+            free_gpus.append(i)
+    return free_gpus
+
+
+def send_job(aws_instance, gpu, job_json):
+    aws_instance.switch_window(gpu)
+    server_path = 'job_jsons/'+job_json
+    aws_instance.upload(job_json,server_path )  # TODO: upload data
+    aws_instance.run('CUDA_VISIBLE_DEVICE={} PYTHONPATH=. python3 cnn/train_opt2.py --data {}'.format(gpu, server_path))
+    return
+
+
+def manageJobs_new(json_input_path, json_output_path, resuts_path,  args):
+    while len(os.listdir(json_input_path)) < 8:
+        sleep(600)
+
+    import ncluster
+
+    ncluster.use_aws()
+    task = ncluster.make_task(instance_type='p3.16xlarge', # todo: name
+                              image_name='Deep Learning AMI (Ubuntu) Version 16.0')
+    task.switch_window(9)  # general window
+    task.run('sudo pip3 install gpustat')
+    task.run('mkdir BANNAS')
+    task.run('cd BANNAS')
+    task.run('mkdir job_jsons')
+    task.upload(os.path.join(args.save, 'code.zip'))
+    #TODO upload pretrained
+    task.run('unzip code.zip')
+    for gpu in range(8):
+        task.switch_window(gpu)
+        task.run('cd BANNAS')
+        task.run('source activate pytorch_p36')  # activate pytorch venv
+    while True:  # TODO
+        free_gpus = check_gpu(task)
+        jobs_to_run = os.listdir(json_input_path)
+        if 'DONE' in json_input_path:
+            json_input_path.remove('DONE')
+            if len(json_input_path) == 0:
+                break
+        while len(free_gpus) > 0 and len(os.listdir(json_input_path)) > 0:
+            job_full_path = os.path.join(json_input_path, jobs_to_run[0])
+            send_job(task, free_gpus[0], job_full_path)
+            os.rename(job_full_path, os.path.join(json_output_path, jobs_to_run[0]))
+            free_gpus = free_gpus[1:]
+            jobs_to_run = jobs_to_run[1:]
+        sleep(300)
+        # TODO download results
+    while len(check_gpu(task)) > 0:  # wait until jobs are done
+        sleep(600)
+    task.run('sudo shutdown -h -P 1')  # shutdown the instance in 1 min
 
 
 def manageJobs(epochJobs, epoch, folderPath):
@@ -167,6 +234,7 @@ class AlphasWeightsLoop(TrainRegime):
         replicator = replicatorClass(self.model, self.modelClass, args, logger)
         # init architect
         self.architect = Architect(replicator, args)
+        self.started_jobs = False
 
     # run on validation set and add validation data to main data row
     def __inferWithData(self, setModelPathFunc, epoch, loggersDict, dataRow):
@@ -189,9 +257,10 @@ class AlphasWeightsLoop(TrainRegime):
         # set JSON file name
         jsonFileName = '{}-{}-[{}].json'.format(args.folderName, nEpoch, id)
         # create training job instance
-        trainingJob = TrainingJob(dict(bopsRatio=model.calcBopsRatio(), bops=model.countBops(), remoteDirPath=self.remoteDirPath,
-                                       bitwidthInfoTable=self.createBitwidthsTable(model, self.logger, self.bitwidthKey),
-                                       jsonFileName=jsonFileName, jsonPath='{}/{}'.format(self.jobsPath, jsonFileName)))
+        trainingJob = TrainingJob(
+            dict(bopsRatio=model.calcBopsRatio(), bops=model.countBops(), remoteDirPath=self.remoteDirPath,
+                 bitwidthInfoTable=self.createBitwidthsTable(model, self.logger, self.bitwidthKey),
+                 jsonFileName=jsonFileName, jsonPath='{}/{}'.format(self.jobsPath, jsonFileName)))
 
         # save model layers partition
         args.partition = model.getCurrentFiltersPartition()
@@ -219,6 +288,8 @@ class AlphasWeightsLoop(TrainRegime):
             epochJobs.append(self.__createTrainingJob(model.choosePathByAlphas, epoch, id))
 
         # create process to manage epoch jobs
+        if not self.started_jobs:
+            self.job_process = Process(target=manageJobs)
         pool = Pool(processes=1)
         pool.apply_async(manageJobs, args=(epochJobs, epoch, self.jobsPath,))
 
@@ -315,6 +386,7 @@ class AlphasWeightsLoop(TrainRegime):
             save_checkpoint(self.trainFolderPath, model, args, epoch, self.best_prec1)
 
         logger.addInfoToDataTable('Finished training, waiting for jobs to finish')
+        open('DONE', 'w+')  ### TODO folder
         # wait until all jobs have finished
         while self.isDictEmpty(self.jobsList) is False:
             self.__updateDataTableAndBopsPlot()

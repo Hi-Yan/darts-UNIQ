@@ -307,9 +307,11 @@ def create_exp_dir(resultFolderPath):
     foldersToZip = ['cnn']
     for folder in foldersToZip:
         folderFullPath = baseFolder + folder
+
+        folderName = path.relpath(folderFullPath)
         for file in listdir(folderFullPath):
-            if path.isfile(file):
-                zipf.write(file)
+            if path.isfile(os.path.join(folderName,file)):
+                zipf.write(os.path.join(folderName,file))
 
     # close zip file
     zipf.close()
