@@ -113,42 +113,42 @@ class TrainRegime:
         dictDiff = modelStateDictKeys.symmetric_difference(set(keysList))
         assert (len(dictDiff) == 0)
 
-        stateDict = OrderedDict()
-        token1 = '.ops.'
-        token2 = '.op.'
-        for bitwidth, bitwidthKeysList in modelDict.items():
-            if bitwidth == (32, 32):
-                continue
-
-            checkpoint, _ = loadCheckpoint(args.dataset, args.model, bitwidth)
-            assert (checkpoint is not None)
-            chckpntStateDict = checkpoint['state_dict']
-            for key in bitwidthKeysList:
-                prefix = key[:key.index(token1)]
-                suffix = key[key.rindex(token2):]
-                # convert model key to checkpoint key
-                chckpntKey = prefix + token1 + '0.0' + suffix
-                # add value to dict
-                stateDict[key] = chckpntStateDict[chckpntKey]
-
-        # load keys from (32, 32) checkpoint, no need to transform keys
-        bitwidth = (32, 32)
-        checkpoint, _ = loadCheckpoint(args.dataset, args.model, bitwidth, filename='model.updated_stats.pth.tar')
-        assert (checkpoint is not None)
-        chckpntStateDict = checkpoint['state_dict']
-        map = model.buildStateDictMap(chckpntStateDict)
-        invMap = {v: k for k, v in map.items()}
-        for key in modelDict[bitwidth]:
-            prefix = key[:key.rindex('.')]
-            suffix = key[key.rindex('.'):]
-            newKey = invMap[prefix]
-
-            stateDict[key] = chckpntStateDict[newKey + suffix]
-
-        dictDiff = modelStateDictKeys.symmetric_difference(set(stateDict.keys()))
-        assert (len(dictDiff) == 0)
-
-        model.load_state_dict(stateDict)
+        # stateDict = OrderedDict()
+        # token1 = '.ops.'
+        # token2 = '.op.'
+        # for bitwidth, bitwidthKeysList in modelDict.items():
+        #     if bitwidth == (32, 32):
+        #         continue
+        #
+        #     checkpoint, _ = loadCheckpoint(args.dataset, args.model, bitwidth)
+        #     assert (checkpoint is not None)
+        #     chckpntStateDict = checkpoint['state_dict']
+        #     for key in bitwidthKeysList:
+        #         prefix = key[:key.index(token1)]
+        #         suffix = key[key.rindex(token2):]
+        #         # convert model key to checkpoint key
+        #         chckpntKey = prefix + token1 + '0.0' + suffix
+        #         # add value to dict
+        #         stateDict[key] = chckpntStateDict[chckpntKey]
+        #
+        # # load keys from (32, 32) checkpoint, no need to transform keys
+        # bitwidth = (32, 32)
+        # checkpoint, _ = loadCheckpoint(args.dataset, args.model, bitwidth, filename='model.updated_stats.pth.tar')
+        # assert (checkpoint is not None)
+        # chckpntStateDict = checkpoint['state_dict']
+        # map = model.buildStateDictMap(chckpntStateDict)
+        # invMap = {v: k for k, v in map.items()}
+        # for key in modelDict[bitwidth]:
+        #     prefix = key[:key.rindex('.')]
+        #     suffix = key[key.rindex('.'):]
+        #     newKey = invMap[prefix]
+        #
+        #     stateDict[key] = chckpntStateDict[newKey + suffix]
+        #
+        # dictDiff = modelStateDictKeys.symmetric_difference(set(stateDict.keys()))
+        # assert (len(dictDiff) == 0)
+        #
+        # model.load_state_dict(stateDict)
         args.loadedOpsWithDiffWeights = True
 
         # ========= save current partition by alphas to checkpoint ==========

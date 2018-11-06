@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from multiprocessing import Process
 from os import system, makedirs, getpid
 from os.path import exists
@@ -68,7 +69,7 @@ def check_gpu(aws_instance):
 
 def send_job(aws_instance, gpu, job_json):
     aws_instance.switch_window(gpu)
-    server_path = 'job_jsons/' + job_json
+    server_path = 'job_jsons/' + job_json #TODO: foldername
     aws_instance.upload(job_json, server_path)
     aws_instance.run('CUDA_VISIBLE_DEVICE={} PYTHONPATH=. python3 cnn/train_opt2.py --data {}'.format(gpu, server_path))
     return
@@ -85,9 +86,11 @@ def download_jobs(aws_instance, results_path):
     return
 
 
-def manageJobs_new(json_input_path, json_output_path, results_path, args):
+def manageJobs(json_input_path, json_output_path, results_path, args):
+    sys.stdout = open(str(os.getpid()) + ".out", "w")  # todo: name
+    sys.stderr = open(str(os.getpid()) + ".err", "w")  # todo: name
     while len(os.listdir(json_input_path)) < 8:
-        sleep(600)
+        sleep(6) #00
 
     ncluster.use_aws()
     task = ncluster.make_task(instance_type='p3.16xlarge',  # todo: name
@@ -95,18 +98,18 @@ def manageJobs_new(json_input_path, json_output_path, results_path, args):
     task.switch_window(9)  # general window
     task.run('sudo pip3 install gpustat')
     task.run('mkdir BANNAS')
+    task.upload(os.path.join(args.save, 'BANNAS/code.zip'))
     task.run('cd BANNAS')
-    task.run('mkdir job_jsons')
-    task.upload(os.path.join(args.save, 'code.zip'))
     task.run('unzip code.zip')
-    task.upload('pre_trained.zip', 'code/pre_trained.zip')  # should be created manually
+    task.upload('pre_trained.zip', 'BANNAS/code/pre_trained.zip')  # should be created manually
     task.run('cd code')
+    task.run('mkdir job_jsons') #TODO args.name
     task.run('unzip pre_trained.zip')
     for gpu in range(8):
         task.switch_window(gpu)
         task.run('cd BANNAS/code')
         task.run('source activate pytorch_p36')  # activate pytorch venv
-    # task.run('pip3 install --force-reinstall torch==0.4.0') #TODO downgrade
+    task.run('conda --yes install pytorch=0.4.0')
     while True:
         task.switch_window(9)  # general window
         free_gpus = check_gpu(task)
@@ -128,79 +131,6 @@ def manageJobs_new(json_input_path, json_output_path, results_path, args):
     download_jobs(task, results_path)
     os.remove(os.path.join(json_input_path, 'DONE'))
     task.run('sudo shutdown -h -P 1')  # shutdown the instance in 1 min
-
-
-def manageJobs(epochJobs, epoch, folderPath):
-    pid = getpid()
-    # create logger for manager
-    logger = SimpleLogger(folderPath, '[{}]-manager'.format(epoch))
-    logger.addInfoTable('Details', [['Epoch', epoch], ['nJobs', len(epochJobs)], ['Folder', folderPath], ['PID', pid]])
-    logger.setMaxTableCellLength(250)
-
-    # copy jobs JSON to server
-    for job in epochJobs:
-        # perform command
-        retVal = system(job.cmdCopyToServer)
-        logger.addRow([['Action', 'Copy to server'], ['File', job.jsonFileName], ['Status', returnSuccessOrFail(retVal)]])
-
-    # init server names
-    servers = ['gaon6', 'gaon4', 'gaon2', 'gaon5']
-    # init number of maximal GPUs we can run in single sbatch
-    nMaxGPUs = 2
-    # # init number of maximal CPUs
-    nMaxCPUs = 4
-    # init number of minutes to wait
-    nMinsWaiting = 10
-    # try sending as much jobs as possible under single sbatch
-    # try sending as much sbatch commands as possible
-    while len(epochJobs) > 0:
-        logger.addRow([['Jobs Waiting', len(epochJobs)]])
-        # set number of jobs we want to run in a single SBATCH command
-        nJobs = min(nMaxGPUs, len(epochJobs))
-        # try to send sbatch command to server, stop when successful
-        retVal = -1
-        while (nJobs > 0) and (retVal != 0):
-            # concatenate JSON files for jobs
-            files = ''
-            for job in epochJobs[:nJobs]:
-                files += escape(job.dstPath) + '?'
-            # remove last comma
-            files = files[:-1]
-            # set number of CPUs
-            nCPUs = min(nMaxCPUs, 3 * nJobs)
-            # try to perform command on one of the servers
-            for serv in servers:
-                # create command
-                jobTitle = 'PID_[{}]_Epoch_[{}]_nJobs_[{}]_jobsLeft_[{}]'.format(pid, epoch, nJobs,
-                                                                                 len(epochJobs) - nJobs)
-                trainCommand = __buildCommand(jobTitle, nJobs, nCPUs, serv, files)
-                # send command to server, we added the -I flag, so if it won't
-                # be able to run immediately, it fails, no more pending
-                retVal = system(trainCommand)
-                # add data row with information
-                dataRow = [['#Trainings', nJobs], ['Server', serv], ['#Waiting', len(epochJobs)], ['retVal', retVal], ['Command', trainCommand]]
-                logger.addRow(dataRow)
-                # clear successfully sent jobs
-                if retVal == 0:
-                    epochJobs = epochJobs[nJobs:]
-                    logger.addSummaryRow([['#Trainings', nJobs], ['Server', serv], ['#Waiting', len(epochJobs)], ['Status', 'Success']])
-                    break
-
-            # check if jobs not sent, try sending less jobs, i.e. use less GPUs
-            # we don't really need to check retVal here, but anyway ...
-            if retVal != 0:
-                nJobs -= 1
-            # wait a bit ... mostly for debugging purposes
-            sleep(10)
-
-        # if didn't manage to send any job, wait 10 mins
-        if retVal != 0:
-            logger.addRow([['Send status', 'Failed'], ['Waiting time (mins)', nMinsWaiting]])
-            sleep(nMinsWaiting * 60)
-
-    logger.addSummaryRow('Sent all jobs successfully')
-    logger.addSummaryRow('Done !')
-
 
 class TrainingJob:
     def __init__(self, dict):
@@ -233,7 +163,9 @@ class AlphasWeightsLoop(TrainRegime):
         self.jobsPathResults = '{}/jobs_out'.format(args.save)
         if not exists(self.jobsPath):
             makedirs(self.jobsPath)
+        if not exists(self.jobsPathOut):
             makedirs(self.jobsPathOut)
+        if not exists(self.jobsPathResults):
             makedirs(self.jobsPathResults)
         # init jobs logger
         self.jobsLogger = SimpleLogger(self.jobsPath, 'jobsLogger')
@@ -247,6 +179,12 @@ class AlphasWeightsLoop(TrainRegime):
         # init validation best precision value from all training jobs
         self.best_prec1 = 0.0
 
+
+        # create process to manage epoch jobs
+        # manageJobs(self.jobsPath, self.jobsPathOut, self.jobsPathResults, args)
+        self.job_process = Process(target=manageJobs,
+                                   args=(self.jobsPath, self.jobsPathOut, self.jobsPathResults, args,))
+        self.job_process.start()
         # ========================== DEBUG ===============================
         # return
         # ================================================================
@@ -256,8 +194,6 @@ class AlphasWeightsLoop(TrainRegime):
         replicator = replicatorClass(self.model, self.modelClass, args, logger)
         # init architect
         self.architect = Architect(replicator, args)
-        self.started_jobs = False
-
     # run on validation set and add validation data to main data row
     def __inferWithData(self, setModelPathFunc, epoch, loggersDict, dataRow):
         # run on validation set
@@ -308,11 +244,6 @@ class AlphasWeightsLoop(TrainRegime):
         # nValidPartitions trainings on setFiltersByAlphas
         for id in range(1, self.nValidPartitions + 1):
             epochJobs.append(self.__createTrainingJob(model.choosePathByAlphas, epoch, id))
-
-        # create process to manage epoch jobs
-        if not self.started_jobs:
-            self.job_process = Process(target=manageJobs,
-                                       args=(self.jobsPath, self.jobsPathOut, self.jobsPathResults, args))
 
         return epochJobs
 
