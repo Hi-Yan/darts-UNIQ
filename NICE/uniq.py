@@ -1,6 +1,5 @@
 from abc import abstractmethod
-from torch.nn import Module, Conv2d, Linear
-from torch.cuda import current_device
+from torch.nn import Module, Conv2d, Linear, BatchNorm2d
 
 from NICE.quantize import quantize, backup_weights, restore_weights
 from NICE.actquant import ActQuant
@@ -81,7 +80,7 @@ class UNIQNet(Module):
             layer.__act_bitwidth__ = self.act_bitwidth
 
         self.full_parameters = {}
-        self.layers_list = []
+        # self.layers_list = self.build_layers_list()
 
         # self.statistics_phase = False
         # self.allow_grad = False
@@ -98,42 +97,46 @@ class UNIQNet(Module):
     def derivedClassSpecific(self, params):
         raise NotImplementedError('subclasses must override derivedClassSpecific()!')
 
-    def refreshOpsList(self):
-        self.layers_list = self.build_layers_list()
+    # def refreshOpsList(self):
+    #     self.layers_list = self.build_layers_list()
+    #
+    # def build_layers_list(self):
+    #   return [x for x in self.modules() if isinstance(x, Conv2d) or isinstance(x, Linear) or isinstance(x, ActQuant) or isinstance(x, BatchNorm2d)]
 
-    def build_layers_list(self):
-        return [x for x in self.modules() if isinstance(x, Conv2d) or isinstance(x, Linear) or isinstance(x, ActQuant)]
+    def layer_modules(self):
+        for x in self.modules():
+            if isinstance(x, Conv2d) or isinstance(x, Linear) or isinstance(x, ActQuant) or isinstance(x, BatchNorm2d):
+                yield x
 
-    def quantizeFunc(self):
-        deviceID = self.layers_list[0].weight.device.index
+    def _quantizeFunc(self, deviceName):
         assert (len(self.bitwidth) == 1)
-        assert (current_device() == deviceID)
-        assert (self.full_parameters == {})
+        assert (deviceName not in self.full_parameters)
         assert (self.quant is True)
         assert (self.noise is False)
         # check if we are in inference mode or we are training with switching stage and this op has already changed stage
         assert ((self.training is False) or ((self.training is True) and (self.noise is False)))
+        # add deviceName as new key in full_parameters
+        self.full_parameters[deviceName] = {}
 
-        layers_list = self.layers_list
-        self.full_parameters = backup_weights(layers_list, {})
-        self.quantize.quantize_uniform_improved(layers_list)
+        self.full_parameters = backup_weights(self.layer_modules(), self.full_parameters, deviceName)
+        self.quantize.quantize_uniform_improved(self.layer_modules())
 
-    def add_noise(self):
-        deviceName = str(self.layers_list[0].weight.device)
+    def _add_noise(self, deviceName):
         assert (len(self.bitwidth) == 1)
         assert (deviceName not in self.full_parameters)
         assert (self.noise is True)
         assert (self.training is True)
         assert (self.quant is False)
+        # add deviceName as new key in full_parameters
+        self.full_parameters[deviceName] = {}
 
-        layers_list = self.layers_list
-        self.full_parameters = backup_weights(layers_list, {})
-        self.quantize.add_improved_uni_noise(layers_list)
+        self.full_parameters = backup_weights(self.layer_modules(), self.full_parameters, deviceName)
+        self.quantize.add_improved_uni_noise(self.layer_modules())
 
-    def restore_state(self):
-        deviceName = str(self.layers_list[0].weight.device)
+    def _restore_state(self, deviceName):
         assert (deviceName in self.full_parameters)
-        restore_weights(self.layers_list, self.full_parameters)
+
+        restore_weights(self.layer_modules(), self.full_parameters, deviceName)
         del self.full_parameters[deviceName]
 
     # def layers_steps(self):
