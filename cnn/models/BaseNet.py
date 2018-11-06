@@ -35,7 +35,7 @@ def preForward(self, input):
     if self.nLayersQuantCompleted < self.nLayers():
         layer = self.layersList[self.nLayersQuantCompleted]
         assert (layer.added_noise is True)
-        for op in layer.refreshOpsList():
+        for op in layer.opsList():
             assert (op.noise is True)
             op.add_noise()
 
@@ -405,7 +405,7 @@ class BaseNet(Module):
             assert (layer.quantized is True)
             # refresh layer ops list. we want ops list to contain the ops DataParallel GPU copies
             # quantize layer ops
-            for op in layer.refreshOpsList():
+            for op in layer.opsList():
                 op.quantizeFunc()
                 assert (check_quantization(op.getConv().weight) <= (2 ** op.bitwidth[0]))
 
