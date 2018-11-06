@@ -1,10 +1,11 @@
 import json
 import os
-from multiprocessing import Pool, Process
+from multiprocessing import Process
 from os import system, makedirs, getpid
 from os.path import exists
 from time import sleep
 
+import ncluster
 from torch import load as loadCheckpoint
 from torch import save as saveCheckpoint
 from torch.optim import SGD
@@ -67,20 +68,29 @@ def check_gpu(aws_instance):
 
 def send_job(aws_instance, gpu, job_json):
     aws_instance.switch_window(gpu)
-    server_path = 'job_jsons/'+job_json
-    aws_instance.upload(job_json,server_path )  # TODO: upload data
+    server_path = 'job_jsons/' + job_json
+    aws_instance.upload(job_json, server_path)
     aws_instance.run('CUDA_VISIBLE_DEVICE={} PYTHONPATH=. python3 cnn/train_opt2.py --data {}'.format(gpu, server_path))
     return
 
 
-def manageJobs_new(json_input_path, json_output_path, resuts_path,  args):
+def download_jobs(aws_instance, results_path):
+    aws_instance.switch_window(10)
+    server_path = 'BANNAS/code/job_jsons/'
+    aws_instance.run('ls ' + server_path + ' > joblist')
+    aws_instance.download('joblist')
+    with open('joblist', 'r') as f:
+        for file in f:
+            aws_instance.download(os.path.join(server_path, file), os.path.join(results_path, file))
+    return
+
+
+def manageJobs_new(json_input_path, json_output_path, results_path, args):
     while len(os.listdir(json_input_path)) < 8:
         sleep(600)
 
-    import ncluster
-
     ncluster.use_aws()
-    task = ncluster.make_task(instance_type='p3.16xlarge', # todo: name
+    task = ncluster.make_task(instance_type='p3.16xlarge',  # todo: name
                               image_name='Deep Learning AMI (Ubuntu) Version 16.0')
     task.switch_window(9)  # general window
     task.run('sudo pip3 install gpustat')
@@ -88,13 +98,17 @@ def manageJobs_new(json_input_path, json_output_path, resuts_path,  args):
     task.run('cd BANNAS')
     task.run('mkdir job_jsons')
     task.upload(os.path.join(args.save, 'code.zip'))
-    #TODO upload pretrained
     task.run('unzip code.zip')
+    task.upload('pre_trained.zip', 'code/pre_trained.zip')  # should be created manually
+    task.run('cd code')
+    task.run('unzip pre_trained.zip')
     for gpu in range(8):
         task.switch_window(gpu)
-        task.run('cd BANNAS')
+        task.run('cd BANNAS/code')
         task.run('source activate pytorch_p36')  # activate pytorch venv
-    while True:  # TODO
+    # task.run('pip3 install --force-reinstall torch==0.4.0') #TODO downgrade
+    while True:
+        task.switch_window(9)  # general window
         free_gpus = check_gpu(task)
         jobs_to_run = os.listdir(json_input_path)
         if 'DONE' in json_input_path:
@@ -108,9 +122,11 @@ def manageJobs_new(json_input_path, json_output_path, resuts_path,  args):
             free_gpus = free_gpus[1:]
             jobs_to_run = jobs_to_run[1:]
         sleep(300)
-        # TODO download results
+
     while len(check_gpu(task)) > 0:  # wait until jobs are done
         sleep(600)
+    download_jobs(task, results_path)
+    os.remove(os.path.join(json_input_path, 'DONE'))
     task.run('sudo shutdown -h -P 1')  # shutdown the instance in 1 min
 
 
@@ -155,9 +171,11 @@ def manageJobs(epochJobs, epoch, folderPath):
             # try to perform command on one of the servers
             for serv in servers:
                 # create command
-                jobTitle = 'PID_[{}]_Epoch_[{}]_nJobs_[{}]_jobsLeft_[{}]'.format(pid, epoch, nJobs, len(epochJobs) - nJobs)
+                jobTitle = 'PID_[{}]_Epoch_[{}]_nJobs_[{}]_jobsLeft_[{}]'.format(pid, epoch, nJobs,
+                                                                                 len(epochJobs) - nJobs)
                 trainCommand = __buildCommand(jobTitle, nJobs, nCPUs, serv, files)
-                # send command to server, we added the -I flag, so if it won't be able to run immediately, it fails, no more pending
+                # send command to server, we added the -I flag, so if it won't
+                # be able to run immediately, it fails, no more pending
                 retVal = system(trainCommand)
                 # add data row with information
                 dataRow = [['#Trainings', nJobs], ['Server', serv], ['#Waiting', len(epochJobs)], ['retVal', retVal], ['Command', trainCommand]]
@@ -204,15 +222,19 @@ class AlphasWeightsLoop(TrainRegime):
         # set number of different partitions we want to draw from alphas multinomial distribution in order to estimate their validation accuracy
         self.nValidPartitions = 3
         # create dir on remove server
-        self.remoteDirPath = '/home/yochaiz/F-BANNAS/cnn/trained_models/{}/{}/{}'.format(args.model, args.dataset, args.folderName)
+        self.remoteDirPath = '/home/yochaiz/F-BANNAS/cnn/trained_models/{}/{}/{}'.format(args.model, args.dataset,
+                                                                                         args.folderName)
         command = 'ssh yochaiz@132.68.39.32 mkdir "{}"'.format(escape(self.remoteDirPath))
         system(command)
 
         # create folder for jobs JSONs
         self.jobsPath = '{}/jobs'.format(args.save)
+        self.jobsPathOut = '{}/jobs_running'.format(args.save)
+        self.jobsPathResults = '{}/jobs_out'.format(args.save)
         if not exists(self.jobsPath):
             makedirs(self.jobsPath)
-
+            makedirs(self.jobsPathOut)
+            makedirs(self.jobsPathResults)
         # init jobs logger
         self.jobsLogger = SimpleLogger(self.jobsPath, 'jobsLogger')
         self.jobsLogger.addInfoTable('Details', [['Remote folder name', self.remoteDirPath]])
@@ -275,7 +297,7 @@ class AlphasWeightsLoop(TrainRegime):
         return trainingJob
 
     # create all training jobs for a single epoch
-    def __createEpochJobs(self, epoch):
+    def __createEpochJobs(self, epoch, args):
         # model = self.model.module
         model = self.model
         # train from scratch (from 32-bit pre-trained) model partitions based on alphas distribution
@@ -289,9 +311,8 @@ class AlphasWeightsLoop(TrainRegime):
 
         # create process to manage epoch jobs
         if not self.started_jobs:
-            self.job_process = Process(target=manageJobs)
-        pool = Pool(processes=1)
-        pool.apply_async(manageJobs, args=(epochJobs, epoch, self.jobsPath,))
+            self.job_process = Process(target=manageJobs,
+                                       args=(self.jobsPath, self.jobsPathOut, self.jobsPathResults, args))
 
         return epochJobs
 
@@ -332,7 +353,7 @@ class AlphasWeightsLoop(TrainRegime):
             dataRow = self.trainAlphas(self.search_queue[epoch % args.alphas_data_parts], self.architect, epoch, loggersDict)
 
             # create epoch jobs
-            epochJobsList = self.__createEpochJobs(epoch)
+            epochJobsList = self.__createEpochJobs(epoch, args)
             # add current epoch JSONs with the rest of JSONs
             self.jobsList[epoch] = epochJobsList
 
@@ -350,7 +371,8 @@ class AlphasWeightsLoop(TrainRegime):
             # turn on weights gradients
             model.turnOnWeights()
             # init optimizer
-            optimizer = SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+            optimizer = SGD(model.parameters(), args.learning_rate, momentum=args.momentum,
+                            weight_decay=args.weight_decay)
             # train weights with 1 epoch per stage
             wEpoch = 1
             switchStageFlag = True
@@ -386,10 +408,9 @@ class AlphasWeightsLoop(TrainRegime):
             save_checkpoint(self.trainFolderPath, model, args, epoch, self.best_prec1)
 
         logger.addInfoToDataTable('Finished training, waiting for jobs to finish')
-        open('DONE', 'w+')  ### TODO folder
+        open(os.path.join(self.jobsPath, 'DONE'), 'w+')
         # wait until all jobs have finished
-        while self.isDictEmpty(self.jobsList) is False:
-            self.__updateDataTableAndBopsPlot()
+        while len(os.listdir(self.jobsPath)) > 0:
             # wait 10 mins
             sleep(10 * 60)
         # save checkpoint
@@ -442,7 +463,8 @@ class AlphasWeightsLoop(TrainRegime):
                             # update key exists
                             existingKeys.append(key)
                             # replace value in table
-                            self.logger.replaceValueInDataTable(self.generateTempValue(job.jsonFileName, key), self.formats[key].format(v))
+                            self.logger.replaceValueInDataTable(self.generateTempValue(job.jsonFileName, key),
+                                                                self.formats[key].format(v))
                             # add status to dataRow
                             dataRow.append(['Status', 'Updated'])
                             addRowFunc = self.jobsLogger.addSummaryRow
