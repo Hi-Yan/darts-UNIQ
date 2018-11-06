@@ -29,6 +29,18 @@ class QuantizedOp(UNIQNet):
     def getReLU(self):
         return self._relu[0]
 
+    def __getDeviceName(self):
+        return str(self.op[0].weight.device)
+
+    def quantizeFunc(self):
+        self._quantizeFunc(self.__getDeviceName())
+
+    def add_noise(self):
+        self._add_noise(self.__getDeviceName())
+
+    def restore_state(self):
+        self._restore_state(self.__getDeviceName())
+
     def reset_flops_count(self):
         pass
 
@@ -149,8 +161,8 @@ class MixedFilter(Block):
                 self.ops.append(self.initOps(bitwidths, params))
 
         # init list of all operations (including copies) as single long list
-        # for cases we have to modify all ops
-        self._opsList = self.buildOpsList()
+        # # for cases we have to modify all ops
+        # self._opsList = self.buildOpsList()
 
         # init ops forward counters
         self.opsForwardCounters = self.buildOpsForwardCounters()
@@ -265,21 +277,26 @@ class MixedFilter(Block):
     def nOpsCopies(self):
         return len(self.ops)
 
-    def buildOpsList(self):
-        opsList = []
+    def opsList(self):
         for ops in self.ops:
             for op in ops:
-                op.refreshOpsList()
-                opsList.append(op)
+                yield op
 
-        return opsList
-
-    def refreshOpsList(self):
-        self._opsList = self.buildOpsList()
-        return self._opsList
-
-    def opsList(self):
-        return self._opsList
+    # def buildOpsList(self):
+    #     opsList = []
+    #     for ops in self.ops:
+    #         for op in ops:
+    #             op.refreshOpsList()
+    #             opsList.append(op)
+    #
+    #     return opsList
+    #
+    # def refreshOpsList(self):
+    #     self._opsList = self.buildOpsList()
+    #     return self._opsList
+    #
+    # def opsList(self):
+    #     return self._opsList
 
     # # select random alpha
     # def chooseRandomPath(self):
