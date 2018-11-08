@@ -198,9 +198,7 @@ def logParameters(logger, args, model):
     printModelToFile(model, args.save)
 
 
-def zipFolder(p, zipf):
-    # get p folder relative path
-    folderName = path.relpath(p)
+def zipFolder(p, pathFunc, zipf):
     for base, dirs, files in walk(p):
         if base.endswith('__pycache__'):
             continue
@@ -210,7 +208,7 @@ def zipFolder(p, zipf):
                 continue
 
             fn = path.join(base, file)
-            zipf.write(fn, fn[fn.index(folderName):])
+            zipf.write(fn, pathFunc(fn))
 
 
 def zipFiles(saveFolder, zipFname, attachPaths):
@@ -290,31 +288,34 @@ def create_exp_dir(resultFolderPath):
     if not os.path.exists(resultFolderPath):
         os.makedirs(resultFolderPath)
 
-    zipPath = '{}/code.zip'.format(resultFolderPath)
+    codeFilename = 'code.zip'
+    zipPath = '{}/{}'.format(resultFolderPath, codeFilename)
     zipf = ZipFile(zipPath, 'w', ZIP_DEFLATED)
 
     # init project base folder
     baseFolder = path.dirname(path.abspath(getfile(currentframe())))  # script directory
-    baseFolder += '/../'
+    baseFolder += '/..'
+    # init path function
+    pathFunc = lambda fn: path.relpath(fn, baseFolder)
     # init folders we want to zip
-    foldersToZip = ['cnn/models', 'cnn/trainRegime', 'cnn/gradEstimators', 'UNIQ', 'NICE']
+    foldersToZip = ['cnn/models', 'cnn/trainRegime', 'cnn/gradEstimators', 'cnn/managers', 'UNIQ', 'NICE']
     # save folders files
     for folder in foldersToZip:
-        folderFullPath = baseFolder + folder
-        zipFolder(folderFullPath, zipf)
+        zipFolder('{}/{}'.format(baseFolder, folder), pathFunc, zipf)
 
     # save cnn folder files
     foldersToZip = ['cnn']
     for folder in foldersToZip:
-        folderFullPath = baseFolder + folder
-
-        folderName = path.relpath(folderFullPath)
-        for file in listdir(folderFullPath):
-            if path.isfile(os.path.join(folderName,file)):
-                zipf.write(os.path.join(folderName,file))
+        folderName = '{}/{}'.format(baseFolder, folder)
+        for file in listdir(folderName):
+            filePath = '{}/{}'.format(folderName, file)
+            if path.isfile(filePath):
+                zipf.write(filePath, pathFunc(filePath))
 
     # close zip file
     zipf.close()
+
+    return zipPath, codeFilename
 
 
 checkpointFileType = 'pth.tar'
